@@ -1,0 +1,10 @@
+MatchResult
+FileSystem
+__all__
+absolute_import
+gcsio
+CompressionTypes
+FileMetadata
+CompressedFile
+GCSFileSystem
+BeamIOError

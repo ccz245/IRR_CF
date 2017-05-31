@@ -1,0 +1,8 @@
+typehints
+CustomClass
+typecoders
+coders
+pickler
+CustomCoder
+TypeCodersTest
+unittest

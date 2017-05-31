@@ -1,0 +1,17 @@
+POSITIONAL_IGNORE
+scopes_to_string
+POSITIONAL_EXCEPTION
+_add_query_parameter
+__author__
+string_to_scopes
+logger
+six
+inspect
+POSITIONAL_WARNING
+__all__
+logging
+POSITIONAL_SET
+positional
+positional_parameters_enforcement
+functools
+urllib

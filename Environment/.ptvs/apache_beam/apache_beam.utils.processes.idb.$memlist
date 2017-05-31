@@ -1,0 +1,9 @@
+Popen
+check_output
+platform
+call
+subprocess
+check_call
+STDOUT
+force_shell
+PIPE

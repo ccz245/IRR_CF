@@ -1,0 +1,7 @@
+_Win32Opener
+locked_file
+time
+win32file
+win32con
+pywintypes
+errno

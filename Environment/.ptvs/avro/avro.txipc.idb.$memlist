@@ -1,0 +1,17 @@
+TwistedHTTPTransceiver
+Agent
+TwistedRequestor
+AvroResponderResource
+AvroProtocol
+server
+implements
+StringIO
+IBodyProducer
+io
+RequestStreamingProducer
+ipc
+resource
+maybeDeferred
+Deferred
+Protocol
+Headers

@@ -1,0 +1,9 @@
+bz2
+os
+gzip
+TestCompressedFile
+CompressionTypes
+StringIO
+CompressedFile
+tempfile
+unittest

@@ -1,0 +1,14 @@
+git
+LocalBuildDoc
+cStringIO
+log
+apidoc
+_rst_template
+e
+_find_modules
+setup_command
+os
+application
+options
+sys
+fnmatch

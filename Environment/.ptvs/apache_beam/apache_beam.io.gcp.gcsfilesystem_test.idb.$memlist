@@ -1,0 +1,6 @@
+gcsfilesystem
+unittest
+mock
+GCSFileSystemTest
+FileMetadata
+BeamIOError

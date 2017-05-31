@@ -1,0 +1,7 @@
+logging
+re
+unittest
+collections
+wordcount_minimal
+tempfile
+WordCountMinimalTest

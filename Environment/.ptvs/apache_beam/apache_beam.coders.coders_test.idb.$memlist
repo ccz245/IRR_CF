@@ -1,0 +1,11 @@
+ProtoCoderTest
+base64
+FallbackCoderTest
+logging
+DummyClass
+CodersTest
+coders
+test_message
+coders_registry
+PickleCoderTest
+unittest
