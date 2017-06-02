@@ -1,8 +1,19 @@
+from __future__ import absolute_import
+
 import apache_beam as beam
-# from beam_utils.sources import CsvFileSource
-from datetime import timedelta, date
+import argparse
+import logging
+import re
+
+from apache_beam.io.gcp.internal.clients import bigquery
+from datetime import timedelta, date, datetime
 from dateutil.relativedelta import *
-from pyxll import xl_func
+from apache_beam.io import ReadFromText
+from apache_beam.io import WriteToText
+from apache_beam.metrics import Metrics
+from apache_beam.metrics.metric import MetricsFilter
+from apache_beam.options.pipeline_options import PipelineOptions
+from apache_beam.options.pipeline_options import SetupOptions
 
 def linearDistance(x2, x1):
     result = x2 - x1
@@ -179,20 +190,23 @@ class Cashflow:
         result = "{0},{1},{2},{3},{4}".format(self.id, self.paymentDate, self.interest, self.principal, self.remaining)
         return [result]
 
+    def AsDict(self):
+        dict = {}
+        dict['id'] = self.id
+        dict['paymentDate'] = str(self.paymentDate)
+        dict['interest'] = self.interest
+        dict['principal'] = self.principal
+        dict['remaining'] = self.remaining
+        return dict
 
 class Object(object):
     pass
-
-
-def ToLevelPay(line):
-    return None
 
 
 def CreateData(reportingDate, count):
     result = []
     for i in range(0, count):
         item = Object()
-        item.reportingDate = reportingDate
         item.id = i
         item.settlementDate = date(2016, 7, 15)
         setattr(item, "maturityDate", date(2046,12,15))
@@ -208,6 +222,31 @@ def CreateData(reportingDate, count):
 def ToLevelPay(data):
     value = LevelPay(data.id, data.settlementDate, data.maturityDate, data.paymentFrequency, data.notional, data.spread, data.firstCoupon)
     setattr(data, "product", value)
+    return data
+
+def CsvToData(line):
+    (id, settlementDate, maturityDate, paymentFrequency, notional, spread, firstCoupon, remainingAmount) = line.split(',')
+    data = Object()
+    data.id = id
+    data.settlementDate = datetime.strptime(settlementDate, '%Y-%m-%d').date()
+    data.maturityDate = datetime.strptime(maturityDate, '%Y-%m-%d').date()
+    data.paymentFrequency = int(paymentFrequency)
+    data.notional = float(notional)
+    data.spread = float(spread)
+    data.firstCoupon = float(firstCoupon)
+    data.remainingAmount = float(remainingAmount)
+    return data
+
+def DictToData(dict):
+    data = Object()
+    data.id = str(dict['id'])
+    data.settlementDate = datetime.strptime(dict['settlementDate'], '%Y-%m-%d').date()
+    data.maturityDate = datetime.strptime(dict['maturityDate'], '%Y-%m-%d').date()
+    data.paymentFrequency = dict['paymentFrequency']
+    data.notional = dict['notional']
+    data.spread = dict['spread']
+    data.firstCoupon = dict['firstCoupon']
+    data.remainingAmount = dict['remainingAmount']
     return data
 
 def getCurve(reportingDate):
@@ -243,172 +282,57 @@ def getCurve(reportingDate):
     result = Curve("abc", reportingDate, tenors)    
     return result
 
-def test():
+def addParameter(obj, name, value):
+    setattr(obj, name, value)
+    return obj
+
+def addField(schema, name, type = 'string', nullability = 'nullable'):
+    field = bigquery.TableFieldSchema()
+    field.name = name
+    field.type = type
+    field.mode = nullability
+    schema.fields.append(field)    
+
+def getSchema():
+    schema = bigquery.TableSchema()
+    addField(schema, 'id')
+    addField(schema, 'paymentDate', 'STRING')
+    addField(schema, 'principal', 'FLOAT')
+    addField(schema, 'interest', 'FLOAT')
+    addField(schema, 'remaining', 'FLOAT')
+    return schema        
+
+def run(runner):
     reportingDate = date(2016, 12, 31)
     curve = getCurve(reportingDate)
-    data = CreateData(reportingDate, 1000)
-    pp = beam.Pipeline('DirectRunner')
+    parser = argparse.ArgumentParser()
+    known_args, pipeline_args = parser.parse_known_args(None)
+    pipeline_args.extend([
+        '--runner={0}'.format(runner),
+        '--project=igneous-primacy-146120',
+        '--staging_location=gs://igneous-primacy-146120-test-bucket/staging',
+        '--temp_location=gs://igneous-primacy-146120-test-bucket/temp',
+        '--job_name=irrbb2',
+        '--num_workers=50',
+    ])
+    pipeline_options = PipelineOptions(pipeline_args)
+    pipeline_options.view_as(SetupOptions).save_main_session = True
+    schema = getSchema()
+    pp = beam.Pipeline(options = pipeline_options)
+#        | 'Read products' >> beam.io.ReadFromText('gs://igneous-primacy-146120-test-bucket/temp/products.csv', skip_header_lines = 1) \
+#        | 'Read products' >> beam.io.Read(beam.io.BigQuerySource(query='SELECT * FROM cashflow.bq_products LIMIT 100', use_standard_sql = True)) \
     pp \
-        | 'Create products' >> beam.Create(data) \
+        | 'Read products' >> beam.io.Read(beam.io.BigQuerySource(dataset='cashflow', table='bq_products')) \
+        | 'Line to data' >> beam.Map(DictToData) \
+        | 'Add reporting date' >> beam.Map(lambda x: addParameter(x, "reportingDate", reportingDate)) \
         | 'Convert to LevelPay' >> beam.Map(ToLevelPay) \
         | 'Generate cashflows' >> beam.FlatMap(lambda data: data.product.getCashflows(data.reportingDate, data.remainingAmount, curve)) \
-        | 'To text' >> beam.FlatMap(lambda x: x.AsCsv()) \
-        | 'Save results' >> beam.io.WriteToText('C:\Users\huibr\Documents\Visual Studio 2015\Projects\PlayBeam\cashflows.csv')
+        | 'To text' >> beam.Map(lambda x: x.AsDict()) \
+        | 'Save results' >> beam.io.Write(beam.io.BigQuerySink(schema = schema, table='irrbb_results', dataset='cashflow', create_disposition=beam.io.BigQueryDisposition.CREATE_IF_NEEDED, write_disposition=beam.io.BigQueryDisposition.WRITE_TRUNCATE))
+#        | 'Save results' >> beam.io.WriteToText('gs://igneous-primacy-146120-test-bucket/temp/cashflows', file_name_suffix='csv')
 
     pp.run();
 
-#        | 'Read products' >> beam.io.Read(CsvFileSource('C:\Users\huibr\Documents\Visual Studio 2015\Projects\PlayBeam\products.csv')) \
-#        | 'Read products' >> beam.io.ReadFromText('C:\Users\huibr\Documents\Visual Studio 2015\Projects\PlayBeam\products.csv') \
-    #pc = beam.Pipeline('DirectRunner')
-
-    #pc \
-    #    | 'Read Tenors' >> beam.io.ReadFromText('C:\Users\huibr\Documents\Visual Studio 2015\Projects\PlayBeam\tenors.csv') \
-    #    | 'Convert to Tenor' >> beam.Map(ToTenor) \
-    #    | 'Group tenors by curve' >> beam.GroupByKey(lambda t: t.curveName)
-#        | 'Calculate Cashflows' >> beam.FlatMap(lambda x: x.toCashflows())
-
-    #products = [LevelPay(1, 100, 0.001, 'GBP', 60), LevelPay(2, 200, 0.02, 'GBP', 120)]
-    #res = products | beam.FlatMap(lambda x: x.getCashflows([1, 2, 3]))
-    #print res
-
-@xl_func("cached_object cfs, cached_object curve: float")
-def eve(cfs, curve):
-    result = 0
-    for cf in cfs:
-        result = result + curve.df(cf.paymentDate) * (cf.interest +  cf.principal)
-    return result
-
-
-@xl_func("cached_object curve, string id, float bps: cached_object")
-def shockCurve(curve, id, bps):
-    result = curve.shock(id, bps)
-    return result
-
-
-@xl_func("string name, date[] dates, float[] rates: cached_object")
-def createCurve(name, dates, rates):
-    """
-    Create a yield curve with a given reference name.
-
-    :param name:  Reference name of the curve. e.g. GBP LIBOR
-    :param dates: An array of tenor dates.
-    :param rates: An array of interest rates.
-    """
-    tenors = []
-    for dte, rate in zip(dates, rates):
-        tenor = Tenor(dte[0], rate[0])
-        tenors.append(tenor)
-    result = Curve(name, dates[0][0], tenors)
-    return result
-
-
-@xl_func("cached_object curve, date dte")
-def getRate(curve, dte):
-    """
-    Retrieve an interpolated rate for a specific date from a reference curve.
-
-    :param name: A curve Reference
-    :param dte:  A tenor date for which the interpolated rate should be returned.
-    """
-    return curve.tenorDict[dte]
-
-@xl_func("cached_object curve, date fromDate, date toDate: float")
-def getForwardRate(curve, fromDate, toDate):
-    result = curve.fr(fromDate, toDate)
-    return result
-
-@xl_func("string id, date settlementDate, date maturityDate, int paymentFrequency, float notional, float spread, float firstCoupon: cached_object")
-def createLevelPay(id, settlementDate, maturityDate, paymentFrequency, notional = 1, spread = 0, firstCoupon = None):
-    result = LevelPay(id, settlementDate, maturityDate, paymentFrequency, notional, spread, firstCoupon)
-    return result
-
-
-@xl_func("cached_object leg, date reportingDate, float remainingAmount, cached_object curve: cached_object")
-def getCashflows(leg, reportingDate, remainingAmount, curve):
-    result = leg.getCashflows(reportingDate, remainingAmount, curve)
-    return result
-
-
-@xl_func("cached_object obj, string method, cached_list_or_vals pars: cached_object")
-def invoke(obj, method, pars):
-    attr = getattr(obj, method)
-    if attr is None:
-        return "Attribute not found: %s" % (method)
-
-    result = attr(pars)
-    return result    
-
-
-@xl_func("cached_object_or_val p0, cached_object_or_val p1, cached_object_or_val p2, cached_object_or_val p3, cached_object_or_val p4, cached_object_or_val p5, cached_object_or_val p6, cached_object_or_val p7, cached_object_or_val p8, cached_object_or_val p9 : cached_object")
-def createArray(p0, p1, p2, p3, p4, p5, p6, p7, p8, p9):
-    result = []
-    if p0:
-        result.append(p0)
-    if p1:
-        result.append(p1)
-    if p2:
-        result.append(p2)
-    if p3:
-        result.append(p3)
-    if p4:
-        result.append(p4)
-    if p5:
-        result.append(p5)
-    if p6:
-        result.append(p6)
-    if p7:
-        result.append(p7)
-    if p8:
-        result.append(p8)
-    if p9:
-        result.append(p9)
-    return result
-
-
-@xl_func("cached_object obj", auto_resize = True)
-def getMethods(obj):
-    result = []
-    for method in dir(obj): 
-        if callable(getattr(obj, method)):
-            result.append([method])
-    return result
-
-
-@xl_func("cached_object obj", auto_resize = True)
-def getProperties(obj):
-    result = []
-    for attr in dir(obj): 
-        if not callable(getattr(obj, attr)):
-            result.append([attr])
-    return result
-
-
-@xl_func("cached_object obj, string propName: string")
-def getProp(obj, propName):
-    result = getattr(obj, propName)
-    return result
-
-
-@xl_func("cached_object obj")
-def getHelp(obj):
-    result = getattr(obj, "__doc__")
-    return result
-
-
-@xl_func("cached_object obj, int index: cached_object")
-def getArrayItem(obj, index):
-    result = obj[index]
-    return result
-
-
-@xl_func("cached_object obj, string method", auto_resize = True)
-def getArgs(obj, method):
-    attr = getattr(obj, method)
-    result = []
-    for name in attr.__code__.co_varnames:    
-        result.append([name])
-    return result
-
-
 if __name__ == "__main__":
-    test()
+    #run('DirectRunner')
+    run('DataflowRunner')

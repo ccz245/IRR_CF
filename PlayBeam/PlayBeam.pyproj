@@ -12,7 +12,7 @@
     <OutputPath>.</OutputPath>
     <Name>PlayBeam</Name>
     <RootNamespace>PlayBeam</RootNamespace>
-    <InterpreterId>{123809fd-da55-4d70-b201-e9ee61bb43f9}</InterpreterId>
+    <InterpreterId>{f91ffefe-2d8c-49b5-8877-6a64f8259170}</InterpreterId>
     <InterpreterVersion>2.7</InterpreterVersion>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)' == 'Debug' ">
@@ -24,14 +24,23 @@
     <EnableUnmanagedDebugging>false</EnableUnmanagedDebugging>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="excel_helpers.py">
+      <SubType>Code</SubType>
+    </Compile>
     <Compile Include="PlayBeam.py" />
   </ItemGroup>
   <ItemGroup>
-    <Interpreter Include="..\Environment\">
-      <Id>{123809fd-da55-4d70-b201-e9ee61bb43f9}</Id>
+    <Content Include="requirements.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <InterpreterReference Include="{697993a4-7bae-4588-8b30-e1899f18b3d3}\2.7" />
+  </ItemGroup>
+  <ItemGroup>
+    <Interpreter Include="env\">
+      <Id>{f91ffefe-2d8c-49b5-8877-6a64f8259170}</Id>
       <BaseInterpreter>{697993a4-7bae-4588-8b30-e1899f18b3d3}</BaseInterpreter>
       <Version>2.7</Version>
-      <Description>Environment (Python 2.7 (default))</Description>
+      <Description>env (Python 2.7)</Description>
       <InterpreterPath>Scripts\python.exe</InterpreterPath>
       <WindowsInterpreterPath>Scripts\python.exe</WindowsInterpreterPath>
       <LibraryPath>Lib\</LibraryPath>
@@ -39,9 +48,6 @@
       </PathEnvironmentVariable>
       <Architecture>Amd64</Architecture>
     </Interpreter>
-  </ItemGroup>
-  <ItemGroup>
-    <Content Include="requirements.txt" />
   </ItemGroup>
   <PropertyGroup>
     <VisualStudioVersion Condition="'$(VisualStudioVersion)' == ''">10.0</VisualStudioVersion>
