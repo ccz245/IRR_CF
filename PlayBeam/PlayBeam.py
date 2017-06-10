@@ -266,6 +266,7 @@ class FloatLeg:
 class LevelPay(FloatLeg):
     # LevelPay is a subclass of the FloatLeg class, can use print(help(LevelPay)) to see resolution order
     # variables re-specified in subclass will overwrite their values in the parent class
+    # TD revise to take in data object without explicitly specific all attributes
 
     def __init__(self, id, settlementDate, maturityDate, paymentFrequency, prepaymentModel, notional = 1, spread = 0, firstCoupon = None):
         # added so the LevelPay class can take in additional parameters than its parent class FloatLeg
@@ -454,7 +455,7 @@ def runCF():
     # cashflows is a list of instances, each contains all the cashflow and balance amounts on that pay date
     cashflows = transaction.getCashflows(reportingDate, localData.remainingAmount, curve)
 
-    # write existing cashflow results into output csv
+    ''' write existing cashflow results into output csv'''
     for cashflow in cashflows:
         outputTarget.write(cashflow.AsCsv() + "\n")
 
@@ -462,10 +463,6 @@ def runCF():
     # store remaining balance into remaining total list
     for i in range(0, len(cashflows)):
         remainingTotal[i] += cashflows[i].remaining
-
-    print
-    print ('remaining total end of period 1')
-    print (remainingTotal)
 
     '''NII create new business'''
 
@@ -500,11 +497,7 @@ def runCF():
     for i in range(0, len(cashflowsNew)):
         remainingTotal[i+1] += cashflows[i].remaining
 
-    print
-    print ('remaining total end of period 2')
-    print (remainingTotal)
-
-    # close output file after all cashflows are appended
+    '''close output file after all cashflows are appended'''
     outputTarget.close()
 
 # 0609 block out pipeline during testing
