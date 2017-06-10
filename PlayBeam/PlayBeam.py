@@ -91,6 +91,26 @@ def loadBehModel(tranModelName):
     return result
 
 
+def loadNewBus():
+    # target month end total balance for 11 months
+    targetBalanaces = [BalTarget(1, 1000000),
+                      BalTarget(2, 1000000),
+                      BalTarget(3, 1000000),
+                      BalTarget(4, 1000000),
+                      BalTarget(5, 1000000),
+                      BalTarget(6, 1000000),
+                      BalTarget(7, 1000000),
+                      BalTarget(8, 1000000),
+                      BalTarget(9, 1000000),
+                      BalTarget(9, 1000000),
+                      BalTarget(10, 1000000),
+                      BalTarget(11, 1000000)
+                      ]
+
+    result = targetBalanaces
+    return result
+
+
 
 '''=========================================== Market Projection Module ============================================'''
 
@@ -364,8 +384,14 @@ class NewBusiness:
         setattr(item, "firstCoupon", curve.cr(self.spread, self.origDate, self.origDate + relativedelta(months = self.resetFrequency), False))
         setattr(item, "remainingAmount", self.targetBalance - self.remainingBalance)
         setattr(item, "prepaymentModel", 'varMortgageCPR')
-
         return item
+
+
+class BalTarget:
+
+    def __init__(self, period, balance):
+        self.period = period
+        self.balance = balance
 
 
 '''============================================== Results Output Module ============================================'''
@@ -408,9 +434,33 @@ def runCF():
     # spot curve generated in memory, TD load from local / how to switch easily
     curve = getCurve(reportingDate)
     # dummy data generated in memory, changed data volume to 1 transaction for unit testing, , TD load from local / how to switch easily
+    # data generate is done as a list of objects, with each object having contractual features as properties
+    # take first transaction
+    localData = CreateData(reportingDate, 1)[0]
+    transaction = LevelPay(localData.id, localData.settlementDate, localData.maturityDate, localData.paymentFrequency, localData.prepaymentModel, localData.notional, localData.spread, localData.firstCoupon)
+    # cashflows is a list of instances, each contains all the info on a pay date
+    cashflows = transaction.getCashflows(reportingDate, localData.remainingAmount, curve)
+
+    # position 0 of the cashflows list is the first payment
+    # total principal payment adds up scheduled and unscheduled principal pay
+    totalPPay = cashflows[0].principal + cashflows[0].prepayment
+
+
+
+
+
+    results = cashflows[0]
+    print (results)
+    print (results.paymentDate)
+    print (results.beginning)
+    print (results.remaining)
+
+
+
+# 0609 block out pipeline during testing
+def google():
+
     data = CreateData(reportingDate, 1)
-    # load the behavioural model assumptions
-    # behModel = loadBehModel()
     pp = beam.Pipeline('DirectRunner')
 
     '''
