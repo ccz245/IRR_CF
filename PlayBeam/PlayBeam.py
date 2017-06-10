@@ -409,7 +409,7 @@ class Cashflow:
     def AsCsv(self):
         result = "{0},{1},{2},{3},{4},{5},{6},{7},{8}".format(self.id, self.paymentDate, self.beginning, self.rate, self.scheduled, self.interest, self.principal, self.prepayment, self.remaining)
         # 0610 removed [] around result to be tested
-        return result
+        return [result]
 
 
 '''======================================== Google Cloud Integration Module ========================================='''
@@ -457,7 +457,7 @@ def runCF():
 
     ''' write existing cashflow results into output csv'''
     for cashflow in cashflows:
-        outputTarget.write(cashflow.AsCsv() + "\n")
+        outputTarget.write(cashflow.AsCsv()[0] + "\n")
 
     '''update total remaining balance'''
     # store remaining balance into remaining total list
@@ -489,7 +489,7 @@ def runCF():
 
     # write new vol cashflow results into output csv
     for cashflow in cashflowsNew:
-        outputTarget.write(cashflow.AsCsv() + "\n")
+        outputTarget.write(cashflow.AsCsv()[0] + "\n")
 
 
     '''update total remaining balance'''
@@ -501,8 +501,9 @@ def runCF():
     outputTarget.close()
 
 # 0609 block out pipeline during testing
-def google():
-
+# def google():
+    # re-stated reporting date to protect from code above
+    reportingDate = date(2016, 12, 31)
     data = CreateData(reportingDate, 1)
     pp = beam.Pipeline('DirectRunner')
 
