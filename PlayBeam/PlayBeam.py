@@ -354,28 +354,25 @@ class BehModel:
 
 class NewBusiness:
 
-    def __init__(self, payDate, remainingBalance, targetBalance, originalMaturity, paymentFrequency, resetFrequency, curve, spread = 0):
+    def __init__(self, payDate, remainingBalance, targetBalance):
         # input attributes
         self.payDate = payDate
         self.remainingBalance = remainingBalance
         self.targetBalance = targetBalance
-        self.originalMaturity = originalMaturity
-        self.paymentFrequency = paymentFrequency
-        self.resetFrequency = resetFrequency
-        self.curve = curve
-        self.spread = spread
 
         # derived attributes
         # TBC whether to have methods adding attributes, given all are required
+        # TD contractual features for new vol is assumption driven, can add feature to derive from data
         self.id = payDate.strftime('%Y%m%d')
         self.origDate = self.payDate
         self.settlementDate = self.payDate
-        self.maturityDate = self.origDate + relativedelta(months = self.originalMaturity)
+        self.maturityDate = self.origDate + relativedelta(months = 12)
         self.paymentFrequency = 1
         self.notional = self.targetBalance - self.remainingBalance
-        self.spread = self.spread / 12
+        self.spread = 2.5 / 100 / 12
         # TD need to correct first coupon to current coupon
-        self.firstCoupon = curve.cr(self.spread, self.origDate, self.origDate + relativedelta(months = self.resetFrequency), False)
+        # TD build new vol rate derivation
+        self.firstCoupon = 0.5 / 100 / 12 + self.spread
         # TD need to correct to current outstanding balance and original balance (if required)
         self.remainingAmount = self.targetBalance - self.remainingBalance
         self.prepaymentModel = 'varMortgageCPR'
@@ -424,36 +421,70 @@ def ToLevelPay(data):
 
 
 def runCF():
+
+    '''run entire process'''
+    '''initiate run time variables'''
+
     runTime = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
     reportingDate = date(2016, 12, 31)
     # spot curve generated in memory, TD load from local / how to switch easily
     curve = getCurve(reportingDate)
+    # list of balance target instances (period, balance) for 11 month end periods
+    NIItargetBal = loadNewBus()
     # dummy data generated in memory, changed data volume to 1 transaction for unit testing, , TD load from local / how to switch easily
     # data generate is done as a list of objects, with each object having contractual features as properties
     # take first transaction
     localData = CreateData(reportingDate, 1)[0]
+    # create list to contain cumulative remaining balance
+    remainingTotal = []
+
+
+
+    '''cashflow calculation'''
+
+    # create level pay object (ie loading all inputs into CF engine
     transaction = LevelPay(localData.id, localData.settlementDate, localData.maturityDate, localData.paymentFrequency, localData.prepaymentModel, localData.notional, localData.spread, localData.firstCoupon)
-    # cashflows is a list of instances, each contains all the info on a pay date
+    # cashflows is a list of instances, each contains all the cashflow and balance amounts on that pay date
     cashflows = transaction.getCashflows(reportingDate, localData.remainingAmount, curve)
 
-    # position 0 of the cashflows list is the first payment
-    monthEndRemain = cashflows[0].remaining
+    print
+    print ('period 1 existing business')
+    print (cashflows[0].id)
+    print (cashflows[0].paymentDate)
+    print (cashflows[0].beginning)
+    print (cashflows[0].remaining)
 
+    '''NII create new business'''
 
-    # list of balance target instances (period, balance) for 11 month end periods
-    targetBal = loadNewBus()
-    monthEndTarget = targetBal[0].balance
+    # period 1 existing CF results
+    existingResult = cashflows[0]
+    payDate = existingResult.paymentDate
+    remaining = existingResult.remaining
 
-    #
+    # period 1 target month end balance
+    monthEndTarget = NIItargetBal[0].balance
 
+    # create new business transaction data
+    newBusData = NewBusiness(payDate, remaining, monthEndTarget)
 
+    # TD rebuild reporting date dependency (eg a separate evaluation date)
+    reportingDate = date(2017, 01, 31)
 
+    '''NII run off new business'''
+    # create level pay object (ie loading all inputs into CF engine
+    transactionNew = LevelPay(newBusData.id, newBusData.settlementDate, newBusData.maturityDate, newBusData.paymentFrequency, newBusData.prepaymentModel, newBusData.notional, newBusData.spread, newBusData.firstCoupon)
+    # cashflows is a list of instances, each contains all the cashflow and balance amounts on that pay date
+    cashflowsNew = transactionNew.getCashflows(reportingDate, newBusData.remainingAmount, curve)
 
-    results = cashflows[0]
-    print (results)
-    print (results.paymentDate)
-    print (results.beginning)
-    print (results.remaining)
+    print
+    print ('period 2 new business')
+    print (cashflowsNew[0].id)
+    print (cashflowsNew[0].paymentDate)
+    print (cashflowsNew[0].beginning)
+    print (cashflowsNew[0].remaining)
+
+    '''update cummulative remaining balance'''
+
 
 
 
@@ -467,7 +498,7 @@ def google():
     the overall flow of the cashflow processes
     1. load in market data
     2. load in transaction data
-    3. load in business assumption (eg behaviouralisation, prepayment, new business ...) 
+    3. load in business assumption (eg behaviouralisation, prepayment, new business ...)
     4. calculate contractual cashflow
     5. calculate behavioural cashflow
     6. calculate FTP (not in scope for initial feasibility assessment)
