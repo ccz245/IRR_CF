@@ -104,12 +104,9 @@ def loadNewBus():
                       BalTarget(9, 1000000),
                       BalTarget(9, 1000000),
                       BalTarget(10, 1000000),
-                      BalTarget(11, 1000000)
-                      ]
-
+                      BalTarget(11, 1000000)]
     result = targetBalanaces
     return result
-
 
 
 '''=========================================== Market Projection Module ============================================'''
@@ -357,34 +354,32 @@ class BehModel:
 
 class NewBusiness:
 
-    def __init__(self, payDate, remainingBalance, targetBalance, originalMaturity, paymentFrequency, resetFrequency, index, spread = 0):
+    def __init__(self, payDate, remainingBalance, targetBalance, originalMaturity, paymentFrequency, resetFrequency, curve, spread = 0):
+        # input attributes
         self.payDate = payDate
         self.remainingBalance = remainingBalance
         self.targetBalance = targetBalance
         self.originalMaturity = originalMaturity
         self.paymentFrequency = paymentFrequency
         self.resetFrequency = resetFrequency
-        self.index = index
+        self.curve = curve
         self.spread = spread
 
-    def generateNew(self, period, curve):
-        # used the same logic as dummy deal creation
-        # TD merge dummy deal creation with new business generation
-        item = Object()
-        # TD consistent way to generate new deal it across the new business run
-        item.id = period
-        item.origDate = self.payDate
-        item.settlementDate = self.payDate
-        # feasibility test case maturity date is 2046, 12, 15, set to 2017 for unit testing
-        # adding attributes and their values to the data instance
-        setattr(item, "maturityDate", self.origDate + relativedelta(months = self.originalMaturity))
-        setattr(item, "paymentFrequency", 1)
-        setattr(item, "notional", self.targetBalance - self.remainingBalance)
-        setattr(item, "spread", self.spread / 12)
-        setattr(item, "firstCoupon", curve.cr(self.spread, self.origDate, self.origDate + relativedelta(months = self.resetFrequency), False))
-        setattr(item, "remainingAmount", self.targetBalance - self.remainingBalance)
-        setattr(item, "prepaymentModel", 'varMortgageCPR')
-        return item
+        # derived attributes
+        # TBC whether to have methods adding attributes, given all are required
+        self.id = payDate.strftime('%Y%m%d')
+        self.origDate = self.payDate
+        self.settlementDate = self.payDate
+        self.maturityDate = self.origDate + relativedelta(months = self.originalMaturity)
+        self.paymentFrequency = 1
+        self.notional = self.targetBalance - self.remainingBalance
+        self.spread = self.spread / 12
+        # TD need to correct first coupon to current coupon
+        self.firstCoupon = curve.cr(self.spread, self.origDate, self.origDate + relativedelta(months = self.resetFrequency), False)
+        # TD need to correct to current outstanding balance and original balance (if required)
+        self.remainingAmount = self.targetBalance - self.remainingBalance
+        self.prepaymentModel = 'varMortgageCPR'
+        self.settlementDate = self.payDate
 
 
 class BalTarget:
@@ -442,9 +437,14 @@ def runCF():
     cashflows = transaction.getCashflows(reportingDate, localData.remainingAmount, curve)
 
     # position 0 of the cashflows list is the first payment
-    # total principal payment adds up scheduled and unscheduled principal pay
-    totalPPay = cashflows[0].principal + cashflows[0].prepayment
+    monthEndRemain = cashflows[0].remaining
 
+
+    # list of balance target instances (period, balance) for 11 month end periods
+    targetBal = loadNewBus()
+    monthEndTarget = targetBal[0].balance
+
+    #
 
 
 
