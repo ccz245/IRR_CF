@@ -436,8 +436,12 @@ def runCF():
     # take first transaction
     localData = CreateData(reportingDate, 1)[0]
     # create list to contain cumulative remaining balance
+    # TD consider better methods of capturing info, a list of 23 0 values
+    # here the choice of 23 (as suppose to 24) is made to align with T0 is not in cashflow results
     remainingTotal = []
-
+    projectionPeriod = 24
+    for i in range(0, projectionPeriod-1):
+        remainingTotal.append(0)
 
 
     '''cashflow calculation'''
@@ -447,6 +451,7 @@ def runCF():
     # cashflows is a list of instances, each contains all the cashflow and balance amounts on that pay date
     cashflows = transaction.getCashflows(reportingDate, localData.remainingAmount, curve)
 
+
     print
     print ('period 1 existing business')
     print (cashflows[0].id)
@@ -454,12 +459,23 @@ def runCF():
     print (cashflows[0].beginning)
     print (cashflows[0].remaining)
 
+
+    '''update total remaining balance'''
+    # store remaining balance into remaining total list
+    for i in range(0, len(cashflows)):
+        remainingTotal[i] += cashflows[i].remaining
+
+    print
+    print ('remaining total end of period 1')
+    print (remainingTotal)
+
     '''NII create new business'''
 
     # period 1 existing CF results
     existingResult = cashflows[0]
+    # TD consider storing payment date into the total list (so both dates and amounts)
     payDate = existingResult.paymentDate
-    remaining = existingResult.remaining
+    remaining = remainingTotal[0]
 
     # period 1 target month end balance
     monthEndTarget = NIItargetBal[0].balance
@@ -483,9 +499,14 @@ def runCF():
     print (cashflowsNew[0].beginning)
     print (cashflowsNew[0].remaining)
 
-    '''update cummulative remaining balance'''
+    '''update total remaining balance'''
+    # store remaining balance into remaining total list
+    for i in range(0, len(cashflowsNew)):
+        remainingTotal[i+1] += cashflows[i].remaining
 
-
+    print
+    print ('remaining total end of period 2')
+    print (remainingTotal)
 
 
 # 0609 block out pipeline during testing
