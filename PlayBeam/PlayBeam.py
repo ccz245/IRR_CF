@@ -407,7 +407,8 @@ class Cashflow:
 
     def AsCsv(self):
         result = "{0},{1},{2},{3},{4},{5},{6},{7},{8}".format(self.id, self.paymentDate, self.beginning, self.rate, self.scheduled, self.interest, self.principal, self.prepayment, self.remaining)
-        return [result]
+        # 0610 removed [] around result to be tested
+        return result
 
 
 '''======================================== Google Cloud Integration Module ========================================='''
@@ -442,7 +443,9 @@ def runCF():
     projectionPeriod = 24
     for i in range(0, projectionPeriod-1):
         remainingTotal.append(0)
-
+    # initiate an empty csv file to store output
+    outputFile = r"C:\IRR_CF_Results\cashflows_nii_output_" + runTime + '.csv'
+    outputTarget = open(outputFile, "a+")
 
     '''cashflow calculation'''
 
@@ -451,14 +454,9 @@ def runCF():
     # cashflows is a list of instances, each contains all the cashflow and balance amounts on that pay date
     cashflows = transaction.getCashflows(reportingDate, localData.remainingAmount, curve)
 
-
-    print
-    print ('period 1 existing business')
-    print (cashflows[0].id)
-    print (cashflows[0].paymentDate)
-    print (cashflows[0].beginning)
-    print (cashflows[0].remaining)
-
+    # write existing cashflow results into output csv
+    for cashflow in cashflows:
+        outputTarget.write(cashflow.AsCsv() + "\n")
 
     '''update total remaining balance'''
     # store remaining balance into remaining total list
@@ -492,12 +490,10 @@ def runCF():
     # cashflows is a list of instances, each contains all the cashflow and balance amounts on that pay date
     cashflowsNew = transactionNew.getCashflows(reportingDate, newBusData.remainingAmount, curve)
 
-    print
-    print ('period 2 new business')
-    print (cashflowsNew[0].id)
-    print (cashflowsNew[0].paymentDate)
-    print (cashflowsNew[0].beginning)
-    print (cashflowsNew[0].remaining)
+    # write new vol cashflow results into output csv
+    for cashflow in cashflowsNew:
+        outputTarget.write(cashflow.AsCsv() + "\n")
+
 
     '''update total remaining balance'''
     # store remaining balance into remaining total list
@@ -508,6 +504,8 @@ def runCF():
     print ('remaining total end of period 2')
     print (remainingTotal)
 
+    # close output file after all cashflows are appended
+    outputTarget.close()
 
 # 0609 block out pipeline during testing
 def google():
