@@ -426,6 +426,26 @@ class Cashflow:
         return [result]
 
 
+class IncomeAccrual:
+
+    def __init__(self, cashflowCurrent, cashflowNext, monthEndCurrent):
+        self.cashflowCurrent = cashflowCurrent
+        self.cashflowNext = cashflowNext
+        self.monthEndCurrent = monthEndCurrent
+
+        self.monthEndPrev = self.monthEndCurrent + relativedelta(day=1, days=-1)
+        self.daysInMonPrev = self.monthEndPrev.day
+        self.monthEndNext = self.monthEndCurrent + relativedelta(day=1, months=+2, days=-1)
+        self.daysInMonCurrent = self.monthEndCurrent.day
+
+        self.paymentDay = self.cashflowCurrent.paymentDate.day
+
+        self.income = (cashflowCurrent.interest * self.paymentDay / self.daysInMonPrev) + (self.cashflowNext.interest * (self.daysInMonCurrent - self.paymentDay) / self.daysInMonCurrent)
+
+
+
+
+
 '''======================================== Google Cloud Integration Module ========================================='''
 
 
@@ -467,7 +487,7 @@ def runCF():
     outputFile = r"C:\IRR_CF_Results\cashflows_nii_output_" + runTime + '.csv'
     outputTarget = open(outputFile, "a+")
     # add field names to output file
-    outputTarget.write("id,Payment_Date,Beginning_Balance,Interest_Rate,Scheduled_Total,Interest_Payment,Principal_Payment,Prepayment,Remaining_Balance" + "\n")
+    outputTarget.write("id,Payment_Date,Beginning_Balance,Interest_Rate,Scheduled_Total,Interest_Payment,Principal_Payment,Prepayment,Remaining_Balance,Calendar_Income" + "\n")
 
     '''cashflow calculation'''
 
@@ -478,8 +498,12 @@ def runCF():
         cashflows = levelpay.getCashflows(reportingDate, curve)
 
         ''' write existing cashflow results into output csv'''
-        for cashflow in cashflows:
-            outputTarget.write(cashflow.AsCsv()[0] + "\n")
+        for k in range(0, len(cashflows)):
+            if k < len(cashflows)-1:
+                calendarIncome = IncomeAccrual(cashflows[k], cashflows[k+1], cashflows[k+1].paymentDate + relativedelta(day=1, days=-1)).income
+            else:
+                calendarIncome = 0.0
+            outputTarget.write(cashflows[k].AsCsv()[0] + "," + str(calendarIncome) + "\n")
 
         '''update total remaining balance'''
         # store remaining balance into remaining total list
