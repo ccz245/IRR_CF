@@ -104,7 +104,20 @@ def loadNewBus():
                       BalTarget(9, 1000000),
                       BalTarget(9, 1000000),
                       BalTarget(10, 1000000),
-                      BalTarget(11, 1000000)]
+                      BalTarget(11, 1000000),
+                      BalTarget(12, 1000000),
+                      BalTarget(13, 1000000),
+                      BalTarget(14, 1000000),
+                      BalTarget(15, 1000000),
+                      BalTarget(16, 1000000),
+                      BalTarget(17, 1000000),
+                      BalTarget(18, 1000000),
+                      BalTarget(19, 1000000),
+                      BalTarget(20, 1000000),
+                      BalTarget(21, 1000000),
+                      BalTarget(22, 1000000),
+                      BalTarget(23, 1000000),
+                      BalTarget(24, 1000000)]
     result = targetBalanaces
     return result
 
@@ -216,15 +229,15 @@ class Scenario:
 
 class FloatLeg:
 
-    def __init__(self, id, settlementDate, maturityDate, paymentFrequency, prepaymentModel, notional = 1, spread = 0):
-        self.id = id
+    def __init__(self, transaction):
+        self.id = transaction.id
         # TD revise this to originationDate to align with terminology
-        self.settlementDate = settlementDate
-        self.maturityDate = maturityDate
+        self.settlementDate = transaction.settlementDate
+        self.maturityDate = transaction.maturityDate
         # paymentFrequency is read as an integer for number of months
-        self.paymentFrequency = paymentFrequency
-        self.notional = notional
-        self.spread = spread
+        self.paymentFrequency = transaction.paymentFrequency
+        self.remainingAmount = transaction.remainingAmount
+        self.spread = transaction.spread
         self.payDates = []
         self.initPayDates()
 
@@ -258,7 +271,7 @@ class FloatLeg:
                 prevDate = reportingDate
             # need to separate out logic on payment dates from reset dates
             # TD this sees to be forward rate * notional, does that include customer margin?
-            payment = curve.fr(prevDate, curDate) * self.notional
+            payment = curve.fr(prevDate, curDate) * self.remainingAmount
             cashflows.append(Cashflow(self.id, curDate, payment, None, None))
         return cashflows
 
@@ -268,17 +281,18 @@ class LevelPay(FloatLeg):
     # variables re-specified in subclass will overwrite their values in the parent class
     # TD revise to take in data object without explicitly specific all attributes
 
-    def __init__(self, id, settlementDate, maturityDate, paymentFrequency, prepaymentModel, notional = 1, spread = 0, firstCoupon = None):
+    def __init__(self, transaction):
         # added so the LevelPay class can take in additional parameters than its parent class FloatLeg
         # alternative is super().__init__(id, settlementDate, maturityDate, paymentFrequency, notional, spread)
-        FloatLeg.__init__(self, id, settlementDate, maturityDate, paymentFrequency, prepaymentModel, notional, spread)
+        FloatLeg.__init__(self, transaction)
         # new parameter added
         # TD should this be curCoupon?
-        self.firstCoupon = firstCoupon
-        self.prepaymentModel = prepaymentModel
+        self.firstCoupon = transaction.firstCoupon
+        self.prepaymentModel = transaction.prepaymentModel
 
 
-    def getCashflows(self, reportingDate, remainingAmount, curve):
+    def getCashflows(self, reportingDate, curve):
+        remainingAmount = self.remainingAmount
         # getCashflows method is re-defined for Level Pay product
         cashflows = []
         # TD consider to count from reporting date forward as deals can be started 20 yrs ago
@@ -311,10 +325,10 @@ class LevelPay(FloatLeg):
             # TD consider keeping these results (eg as lists?)
             # kept beginning month balance for later output
             beginningAmount = remainingAmount
-            interest = remainingAmount * r
-            payment = remainingAmount * r * A / (A-1)
+            interest = beginningAmount * r
+            payment = beginningAmount * r * A / (A-1)
             principal = payment - interest
-            remainingBeforePrepay = remainingAmount - principal
+            remainingBeforePrepay = beginningAmount - principal
             # TD 0608 removed hard coded smm
             # smm = 1.0 - ((1.0 - 0.12) ** (1.0 / 12.0))
             prepayment = smm * remainingBeforePrepay
@@ -416,7 +430,7 @@ class Cashflow:
 
 
 def ToLevelPay(data):
-    value = LevelPay(data.id, data.settlementDate, data.maturityDate, data.paymentFrequency, data.prepaymentModel, data.notional, data.spread, data.firstCoupon)
+    value = LevelPay(data)
     # set will only affect the instance not the class that created the instance
     setattr(data, "product", value)
     return data
@@ -436,72 +450,65 @@ def runCF():
     # dummy data generated in memory, changed data volume to 1 transaction for unit testing, , TD load from local / how to switch easily
     # data generate is done as a list of objects, with each object having contractual features as properties
     # take first transaction
+    # TD loop through future transactions
     localData = CreateData(reportingDate, 1)[0]
+    transaction = localData
     # create list to contain cumulative remaining balance
     # TD consider better methods of capturing info, a list of 23 0 values
     # here the choice of 23 (as suppose to 24) is made to align with T0 is not in cashflow results
     remainingTotal = []
     projectionPeriod = 24
-    for i in range(0, projectionPeriod-1):
+    # TD remaining total is set to long term during build (ie capture full cf for all new deals)
+    # this approach can be revised so new bus cashflows will truncate at the projection period above
+    maxHorizon = 480
+    for i in range(0, maxHorizon-1):
         remainingTotal.append(0)
     # initiate an empty csv file to store output
     outputFile = r"C:\IRR_CF_Results\cashflows_nii_output_" + runTime + '.csv'
     outputTarget = open(outputFile, "a+")
+    # add field names to output file
+    outputTarget.write("id,Payment_Date,Beginning_Balance,Interest_Rate,Scheduled_Total,Interest_Payment,Principal_Payment,Prepayment,Remaining_Balance" + "\n")
 
     '''cashflow calculation'''
 
-    # create level pay object (ie loading all inputs into CF engine
-    transaction = LevelPay(localData.id, localData.settlementDate, localData.maturityDate, localData.paymentFrequency, localData.prepaymentModel, localData.notional, localData.spread, localData.firstCoupon)
-    # cashflows is a list of instances, each contains all the cashflow and balance amounts on that pay date
-    cashflows = transaction.getCashflows(reportingDate, localData.remainingAmount, curve)
+    for i in range(0, projectionPeriod - 1):
+        # create level pay object (ie loading all inputs into CF engine
+        levelpay = LevelPay(transaction)
+        # cashflows is a list of instances, each contains all the cashflow and balance amounts on that pay date
+        cashflows = levelpay.getCashflows(reportingDate, curve)
 
-    ''' write existing cashflow results into output csv'''
-    for cashflow in cashflows:
-        outputTarget.write(cashflow.AsCsv()[0] + "\n")
+        ''' write existing cashflow results into output csv'''
+        for cashflow in cashflows:
+            outputTarget.write(cashflow.AsCsv()[0] + "\n")
 
-    '''update total remaining balance'''
-    # store remaining balance into remaining total list
-    for i in range(0, len(cashflows)):
-        remainingTotal[i] += cashflows[i].remaining
+        '''update total remaining balance'''
+        # store remaining balance into remaining total list
+        for j in range(i, len(cashflows) + i):
+            remainingTotal[j] += cashflows[j - i].remaining
 
-    '''NII create new business'''
+        '''NII create new business'''
 
-    # period 1 existing CF results
-    existingResult = cashflows[0]
-    # TD consider storing payment date into the total list (so both dates and amounts)
-    payDate = existingResult.paymentDate
-    remaining = remainingTotal[0]
+        # period 1 existing CF results
+        existingResult = cashflows[0]
+        # TD consider storing payment date into the total list (so both dates and amounts)
+        payDate = existingResult.paymentDate
+        remaining = remainingTotal[i]
 
-    # period 1 target month end balance
-    monthEndTarget = NIItargetBal[0].balance
+        # period 1 target month end balance
+        monthEndTarget = NIItargetBal[i].balance
 
-    # create new business transaction data
-    newBusData = NewBusiness(payDate, remaining, monthEndTarget)
-
-    # TD rebuild reporting date dependency (eg a separate evaluation date)
-    reportingDate = date(2017, 01, 31)
-
-    '''NII run off new business'''
-    # create level pay object (ie loading all inputs into CF engine
-    transactionNew = LevelPay(newBusData.id, newBusData.settlementDate, newBusData.maturityDate, newBusData.paymentFrequency, newBusData.prepaymentModel, newBusData.notional, newBusData.spread, newBusData.firstCoupon)
-    # cashflows is a list of instances, each contains all the cashflow and balance amounts on that pay date
-    cashflowsNew = transactionNew.getCashflows(reportingDate, newBusData.remainingAmount, curve)
-
-    # write new vol cashflow results into output csv
-    for cashflow in cashflowsNew:
-        outputTarget.write(cashflow.AsCsv()[0] + "\n")
-
-
-    '''update total remaining balance'''
-    # store remaining balance into remaining total list
-    for i in range(0, len(cashflowsNew)):
-        remainingTotal[i+1] += cashflows[i].remaining
+        # create new business transaction data
+        newTransaction = NewBusiness(payDate, remaining, monthEndTarget)
+        # set current transaction to new transaction for next iteration
+        transaction = newTransaction
+        # TD rebuild reporting date dependency (eg a separate evaluation date)
+        reportingDate += relativedelta(day=1, months=+2, days=-1)
 
     '''close output file after all cashflows are appended'''
     outputTarget.close()
 
 # 0609 block out pipeline during testing
-# def google():
+def google():
     # re-stated reporting date to protect from code above
     reportingDate = date(2016, 12, 31)
     data = CreateData(reportingDate, 1)
