@@ -369,7 +369,7 @@ class BehModel:
 
 class NewBusiness:
 
-    def __init__(self, payDate, remainingBalance, targetBalance):
+    def __init__(self, payDate, remainingBalance, targetBalance, curve):
         # input attributes
         self.payDate = payDate
         self.remainingBalance = remainingBalance
@@ -387,7 +387,7 @@ class NewBusiness:
         self.spread = 2.5 / 100 / 12
         # TD need to correct first coupon to current coupon
         # TD build new vol rate derivation
-        self.firstCoupon = 0.5 / 100 / 12 + self.spread
+        self.firstCoupon = curve.cr(self.spread, self.origDate, self.origDate + relativedelta(months = 1), False)
         # TD need to correct to current outstanding balance and original balance (if required)
         self.remainingAmount = self.targetBalance - self.remainingBalance
         self.prepaymentModel = 'varMortgageCPR'
@@ -498,7 +498,7 @@ def runCF():
         monthEndTarget = NIItargetBal[i].balance
 
         # create new business transaction data
-        newTransaction = NewBusiness(payDate, remaining, monthEndTarget)
+        newTransaction = NewBusiness(payDate, remaining, monthEndTarget, curve)
         # set current transaction to new transaction for next iteration
         transaction = newTransaction
         # TD rebuild reporting date dependency (eg a separate evaluation date)
