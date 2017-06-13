@@ -15,6 +15,11 @@ from pyxll import xl_func
 # show NII & EVE number
 
 
+# NII NIBCA to IBCA migration during up shock
+# IBCA with passthrough
+# in theory complete next week
+# can ask for one more week up to 30th of python local build
+
 '''==================================== Transaction, Market, Behavioural Input Module =============================='''
 
 
@@ -92,7 +97,7 @@ def loadBehModel(tranModelName):
 
 
 def loadNewBus():
-    # target month end total balance for 11 months
+    # target month end total balance for 25 months
     targetBalanaces = [BalTarget(1, 1000000),
                       BalTarget(2, 1000000),
                       BalTarget(3, 1000000),
@@ -117,7 +122,8 @@ def loadNewBus():
                       BalTarget(21, 1000000),
                       BalTarget(22, 1000000),
                       BalTarget(23, 1000000),
-                      BalTarget(24, 1000000)]
+                      BalTarget(24, 1000000),
+                      BalTarget(25, 1000000)]
     result = targetBalanaces
     return result
 
@@ -364,6 +370,54 @@ class BehModel:
         return result
 
 
+'''============================================== Income Conversion Module ============================================'''
+
+
+class IncomeAccrual:
+
+    def __init__(self, cashflowCurrent, transaction):
+
+        self.cashflowCurrent = cashflowCurrent
+        self.paymentFrequency = transaction.paymentFrequency
+
+        # TBC what are the principles behind which should be attributes vs temp variables
+        self.id = cashflowCurrent.id
+        self.paymentDate = cashflowCurrent.paymentDate
+        self.interest = cashflowCurrent.interest
+
+        self.currentPaymentDate = cashflowCurrent.paymentDate
+        self.previousPaymentDate = self.currentPaymentDate + relativedelta(months = - self.paymentFrequency)
+        self.paymentDays = (self.currentPaymentDate - self.previousPaymentDate).days
+
+        self.perDayIncome = self.interest / self.paymentDays
+
+    def getIncomes(self):
+
+        # first month end date is the month end date of the previous payment
+        monthEndDate = self.previousPaymentDate + relativedelta(day=1, months=+1, days=-1)
+
+        incomes = []
+
+        # 0613 the accrual system will back calculate monthly income even for months prior to reporting date
+        # this is useful during build, but can build a stopper condition for better performance
+        for i in range(0, self.paymentFrequency + 1):
+            if monthEndDate < self.previousPaymentDate + relativedelta(day=1, months=+2, days=-1):
+                # accrual in the previous payment month
+                daysAccrued = monthEndDate.day - self.previousPaymentDate.day
+            elif monthEndDate >= self.currentPaymentDate:
+                # if next month end is the current payment month, then proportional accrual
+                daysAccrued = self.currentPaymentDate.day
+            else:
+                # if next month is before the current payment month, then full month accrual
+                daysAccrued = monthEndDate.day
+            monthAccrual = daysAccrued * self.perDayIncome
+            # write output to incomes list
+            incomes.append(Income(self.id, monthEndDate, monthAccrual, self.paymentDate, self.interest))
+            monthEndDate = monthEndDate + relativedelta(day=1, months=+2, days=-1)
+
+        return incomes
+
+
 '''=============================================== New Business Module ============================================='''
 
 
@@ -426,22 +480,19 @@ class Cashflow:
         return [result]
 
 
-class IncomeAccrual:
+class Income:
 
-    def __init__(self, cashflowCurrent, cashflowNext, monthEndCurrent):
-        self.cashflowCurrent = cashflowCurrent
-        self.cashflowNext = cashflowNext
-        self.monthEndCurrent = monthEndCurrent
+    def __init__(self, id, monthEndDate, incomeAccrued, paymentDate, interest):
+        self.id = id
+        self.monthEndDate = monthEndDate
+        self.incomeAccrued = incomeAccrued
+        self.paymentDate = paymentDate
+        self.interest = interest
 
-        self.monthEndPrev = self.monthEndCurrent + relativedelta(day=1, days=-1)
-        self.daysInMonPrev = self.monthEndPrev.day
-        self.monthEndNext = self.monthEndCurrent + relativedelta(day=1, months=+2, days=-1)
-        self.daysInMonCurrent = self.monthEndCurrent.day
-
-        self.paymentDay = self.cashflowCurrent.paymentDate.day
-
-        self.income = (cashflowCurrent.interest * self.paymentDay / self.daysInMonPrev) + (self.cashflowNext.interest * (self.daysInMonCurrent - self.paymentDay) / self.daysInMonCurrent)
-
+    def AsCsv(self):
+        result = "{0},{1},{2},{3},{4}".format(self.id, self.monthEndDate, self.incomeAccrued, self.paymentDate, self.interest)
+        # 0610 removed [] around result to be tested
+        return [result]
 
 
 
@@ -475,7 +526,6 @@ def runCF():
     transaction = localData
     # create list to contain cumulative remaining balance
     # TD consider better methods of capturing info, a list of 23 0 values
-    # here the choice of 23 (as suppose to 24) is made to align with T0 is not in cashflow results
     remainingTotal = []
     projectionPeriod = 24
     # TD remaining total is set to long term during build (ie capture full cf for all new deals)
@@ -483,27 +533,32 @@ def runCF():
     maxHorizon = 480
     for i in range(0, maxHorizon-1):
         remainingTotal.append(0)
-    # initiate an empty csv file to store output
-    outputFile = r"C:\IRR_CF_Results\cashflows_nii_output_" + runTime + '.csv'
-    outputTarget = open(outputFile, "a+")
-    # add field names to output file
-    outputTarget.write("id,Payment_Date,Beginning_Balance,Interest_Rate,Scheduled_Total,Interest_Payment,Principal_Payment,Prepayment,Remaining_Balance,Calendar_Income" + "\n")
+    # initiate csv files to store output
+    cashflowFile = r"C:\IRR_CF_Results\cashflows_output_" + runTime + '.csv'
+    cashflowOutput = open(cashflowFile, "a+")
+    incomeFile = r"C:\IRR_CF_Results\income_output_" + runTime + '.csv'
+    incomeOutput = open(incomeFile, "a+")
+    # add field names to output files
+    cashflowOutput.write("id,Payment_Date,Beginning_Balance,Interest_Rate,Scheduled_Total,Interest_Payment,Principal_Payment,Prepayment,Remaining_Balance" + "\n")
+    incomeOutput.write("id,Month_End_Date,Income_Accrual,Payment_Date,Interest_Paid" + "\n")
 
     '''cashflow calculation'''
 
-    for i in range(0, projectionPeriod - 1):
+    for i in range(0, projectionPeriod + 1):
+        # new business for the final projection period is required to account for the full monthly income
         # create level pay object (ie loading all inputs into CF engine
         levelpay = LevelPay(transaction)
         # cashflows is a list of instances, each contains all the cashflow and balance amounts on that pay date
         cashflows = levelpay.getCashflows(reportingDate, curve)
 
-        ''' write existing cashflow results into output csv'''
+        ''' write existing cashflow results into cashflow output csv'''
         for k in range(0, len(cashflows)):
-            if k < len(cashflows)-1:
-                calendarIncome = IncomeAccrual(cashflows[k], cashflows[k+1], cashflows[k+1].paymentDate + relativedelta(day=1, days=-1)).income
-            else:
-                calendarIncome = 0.0
-            outputTarget.write(cashflows[k].AsCsv()[0] + "," + str(calendarIncome) + "\n")
+            cashflowOutput.write(cashflows[k].AsCsv()[0] + "\n")
+
+            incomeAccrual = IncomeAccrual(cashflows[k], transaction)
+            incomes = incomeAccrual.getIncomes()
+            for l in range(0, len(incomes)):
+                incomeOutput.write(incomes[l].AsCsv()[0] + "\n")
 
         '''update total remaining balance'''
         # store remaining balance into remaining total list
@@ -529,7 +584,9 @@ def runCF():
         reportingDate += relativedelta(day=1, months=+2, days=-1)
 
     '''close output file after all cashflows are appended'''
-    outputTarget.close()
+    cashflowOutput.close()
+    incomeOutput.close()
+
 
 # 0609 block out pipeline during testing
 def google():
