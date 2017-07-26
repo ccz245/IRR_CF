@@ -1,9 +1,0 @@
-editingmodes
-notemacs
-absolute_import
-basemode
-vi
-print_function
-__all__
-emacs
-unicode_literals

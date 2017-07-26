@@ -1,7 +1,0 @@
-CUSTOM_COMMANDS
-CustomCommands
-build
-setuptools
-_build
-REQUIRED_PACKAGES
-subprocess

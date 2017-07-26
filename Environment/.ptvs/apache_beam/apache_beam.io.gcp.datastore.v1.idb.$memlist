@@ -1,7 +1,0 @@
-helper_test
-datastoreio
-fake_datastore
-helper
-datastoreio_test
-query_splitter_test
-query_splitter

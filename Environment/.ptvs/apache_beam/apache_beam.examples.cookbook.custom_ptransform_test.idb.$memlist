@@ -1,8 +1,0 @@
-TestPipeline
-custom_ptransform
-logging
-beam
-unittest
-CustomCountTest
-assert_that
-equal_to

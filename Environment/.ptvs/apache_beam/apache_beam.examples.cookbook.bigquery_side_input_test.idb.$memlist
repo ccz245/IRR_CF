@@ -1,8 +1,0 @@
-TestPipeline
-BigQuerySideInputTest
-logging
-beam
-unittest
-bigquery_side_input
-assert_that
-equal_to

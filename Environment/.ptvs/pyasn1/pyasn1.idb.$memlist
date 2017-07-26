@@ -1,7 +1,0 @@
-type
-debug
-error
-codec
-compat
-sys
-__version__

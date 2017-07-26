@@ -1,52 +1,55 @@
-import apache_beam as beam
-# from beam_utils.sources import CsvFileSource
-from datetime import timedelta, date, datetime
+from __future__ import absolute_import
+# TD what's the purpose of this?
+
+# functional libraries used
+from datetime import date, datetime
 from dateutil.relativedelta import *
-from pyxll import xl_func
 
-# TD 170608 Melvin
-# TD keep deposit in mind, behaviouralisation
-# TD key is maintenance, upgrade, clarity
-# TD conversion from business logic to code
-# TD deposits, with pass through assumptions
-# Stephen: you are right, it's not ..., it's ...
-# purpose to comment to the working group, what we need for clear choice decision
-# ie scope is sufficient as acceptance criteria
-# show NII & EVE number
+# technical distribution libraries used
+import apache_beam as beam
+import argparse
+from apache_beam.options.pipeline_options import PipelineOptions
+from apache_beam.options.pipeline_options import SetupOptions
 
 
-# NII NIBCA to IBCA migration during up shock
-# IBCA with passthrough
-# in theory complete next week
-# can ask for one more week up to 30th of python local build
+
+# feedback 170705 meeting with Svetlana, Gilbert
+# separate between back and new volume (and other reporting dimension tagging)
+# get full list of metrics / dimensions needed (Ghaz?)
+# product control will produce projected YC values on daily basis, need to establish working process
+# interpolation methods (eg if input projected curves are not complete)
+# defaults / simplifications in LIQ must not affect IRR
+
+
+'''==================================== Overarching Principles =============================='''
+
+# clarity
+# functional transparency before performance / system optimisation
+
+# business friendly
+# users / business should be able to read code blocks at high level and relate to functional feature
+
+# flexibility
+# aim to allow maximal "externally fed in" setup instead of "internally hard coded"
+
+# consistency
+# variable naming should be standardised and self explanatory, abbreviations should only be used when there is absolutely no ambiguity
+
+# no duplication
+# the same funcationality should be implemented only once, avoid the need to deploy the same changes multiple places
+
+# unification
+# all sites should be able to run with the same build, only differ by input data, avoid need to maintain multiple versions for sites
+
+# one finance
+# over lapping processes between IRR / LIQ should be built so they can both utilise this cashflow engine
+
 
 '''==================================== Transaction, Market, Behavioural Input Module =============================='''
 
 
 class Object(object):
     pass
-
-
-def CreateData(reportingDate, count):
-    # generate testing data in memory, this is very useful for unit testing
-    # the new feature of reading from file should be built in parallel to this, so use can choose data sourcing method
-    result = []
-    for i in range(0, count):
-        item = Object()
-        item.reportingDate = reportingDate
-        item.id = i
-        item.settlementDate = date(2016, 12, 15)
-        # feasibility test case maturity date is 2046, 12, 15, set to 2017 for unit testing
-        # adding attributes and their values to the data instance
-        setattr(item, "maturityDate", date(2017, 12, 15))
-        setattr(item, "paymentFrequency", 1)
-        setattr(item, "notional", 1000000)
-        setattr(item, "spread", 0.025/12)
-        setattr(item, "firstCoupon", 0.035/12)
-        setattr(item, "remainingAmount", 1000000)
-        setattr(item, "prepaymentModel", 'varMortgageCPR')
-        result.append(item)
-    return result
 
 
 def getCurve(reportingDate):
@@ -79,24 +82,133 @@ def getCurve(reportingDate):
     tenors.append(Tenor(date(2031, 12, 31), 0.013881670005))
     tenors.append(Tenor(date(2036, 12, 31), 0.014513760689))
     tenors.append(Tenor(date(2046, 12, 31), 0.014258652999))
-    result = Curve("abc", reportingDate, tenors)
+    result = Curve("GBP_LIBOR_1M", reportingDate, tenors)
     return result
+
+
+def createCurveDict(reportingDate, shock):
+    YC_GBP_LIBOR_1M = getCurve(reportingDate).shock("GBP_LIBOR_1M", shock)
+
+    curveDict = {
+        'YC_GBP_LIBOR_1M': YC_GBP_LIBOR_1M
+    }
+    return curveDict
+
+
+def createIndexDict(reportingDate, curveDict):
+    indexDict = {}
+    RI_Zero_Rate = ZeroIndex("RI_Zero_Rate")
+    indexDict['RI_Zero_Rate'] = RI_Zero_Rate
+    RI_GBP_LIBOR_1M = StandardRateIndex("RI_GBP_LIBOR_1M", 'YC_GBP_LIBOR_1M', 1, curveDict, date(2017, 1, 15), 0.00364435205)
+    indexDict['RI_GBP_LIBOR_1M'] = RI_GBP_LIBOR_1M
+    RI_IBCA_Pass_On = PassOnIndex("RI_IBCA_Pass_On", "RI_GBP_LIBOR_1M", 0.2, indexDict, date(2017, 1, 15), 0.5/100)
+    indexDict['RI_IBCA_Pass_On'] = RI_IBCA_Pass_On
+    return indexDict
 
 
 def loadBehModel(tranModelName):
     # TD add ability to load multiple models into the same instance
     models = []
-    models.append(BehModel('varMortgageCPR', 'CPR', 0.12))
-    models.append(BehModel('IBCA_Beh_Life', 'Beh_Life', 12))
+    models.append(BehModel('Mortgage_CPR', 'CPR', 0.12))
+    models.append(BehModel('NIBCA_Beh_Life', 'Beh_Life', 12))
+    models.append(BehModel('IBCA_Beh_Life', 'Beh_Life', 6))
+    models.append(BehModel('none', 'none', 0))
     # TD can be re-written using next() / list comprehension
-    for i in range(0,len(models)):
+    for i in range(0, len(models)):
         if models[i].modelName == tranModelName:
             # TD result should copy directly from the object in list, instead of having to re-instantiate
             result = BehModel(models[i].modelName, models[i].modelType, models[i].modelValue)
     return result
 
 
-def loadNewBus():
+# NIBCA Load
+def CreateNIBCAData(reportingDate, count):
+    # generate testing data in memory, this is very useful for unit testing
+    # the new feature of reading from file should be built in parallel to this, so use can choose data sourcing method
+    result = []
+    for i in range(0, count):
+        item = Object()
+        item.reportingDate = reportingDate
+        # TD due to parallel processing, synthetic data will not have unique id
+        item.dealID = i
+        item.settlementDate = date(2016, 12, 15)
+        # feasibility test case maturity date is 2046, 12, 15, set to 2017 for unit testing
+        # adding attributes and their values to the data instance
+        setattr(item, "maturityDate", date(2017, 12, 15))
+        setattr(item, "paymentFrequency", 1)
+        setattr(item, "spread", 0.0/100)
+        setattr(item, "currentCoupon", 0.0/100)
+        setattr(item, "remainingAmount", 1500000.0)
+        setattr(item, "amortizationType", "Bullet")
+        setattr(item, "prepaymentModel", "NIBCA_Beh_Life")
+        setattr(item, "rateIndex", "RI_Zero_Rate")
+        setattr(item, "dayCount", "30/360")
+        setattr(item, "productName", "NIBCA")
+
+        result.append(item)
+    return result
+
+def loadNIBCANewBus():
+    # target month end total balance for 25 months
+    # TD solution for potential negative growth
+    targetBalanaces = [BalTarget(1, 1500000),
+                      BalTarget(2, 1500000),
+                      BalTarget(3, 1500000),
+                      BalTarget(4, 1500000),
+                      BalTarget(5, 1500000),
+                      BalTarget(6, 1500000),
+                      BalTarget(7, 1500000),
+                      BalTarget(8, 1500000),
+                      BalTarget(9, 1500000),
+                      BalTarget(9, 1500000),
+                      BalTarget(10, 1500000),
+                      BalTarget(11, 1500000),
+                      BalTarget(12, 1500000),
+                      BalTarget(13, 1500000),
+                      BalTarget(14, 1500000),
+                      BalTarget(15, 1500000),
+                      BalTarget(16, 1500000),
+                      BalTarget(17, 1500000),
+                      BalTarget(18, 1500000),
+                      BalTarget(19, 1500000),
+                      BalTarget(20, 1500000),
+                      BalTarget(21, 1500000),
+                      BalTarget(22, 1500000),
+                      BalTarget(23, 1500000),
+                      BalTarget(24, 1500000),
+                      BalTarget(25, 1500000)]
+    result = targetBalanaces
+    return result
+
+
+# IBCA Load
+def CreateIBCAData(reportingDate, count):
+    # generate testing data in memory, this is very useful for unit testing
+    # the new feature of reading from file should be built in parallel to this, so use can choose data sourcing method
+    result = []
+    for i in range(0, count):
+        item = Object()
+        item.reportingDate = reportingDate
+        item.dealID = i
+        item.settlementDate = date(2016, 12, 15)
+        # feasibility test case maturity date is 2046, 12, 15, set to 2017 for unit testing
+        # adding attributes and their values to the data instance
+        setattr(item, "maturityDate", date(2017, 6, 15))
+        setattr(item, "paymentFrequency", 1)
+        setattr(item, "spread", 0.0/100)
+        setattr(item, "currentCoupon", 0.5/100)
+        setattr(item, "remainingAmount", 1000000.0)
+        setattr(item, "amortizationType", "Bullet")
+        setattr(item, "prepaymentModel", "IBCA_Beh_Life")
+        # IBCA Index IBCA_Pass_On, test index USD_1M_LIBOR
+        setattr(item, "rateIndex", "RI_IBCA_Pass_On")
+        setattr(item, "dayCount", "30/360")
+        setattr(item, "productName", "IBCA")
+
+        result.append(item)
+    return result
+
+def loadIBCANewBus():
     # target month end total balance for 25 months
     targetBalanaces = [BalTarget(1, 1000000),
                       BalTarget(2, 1000000),
@@ -128,21 +240,146 @@ def loadNewBus():
     return result
 
 
+# Mortgage Load
+def CreateMortgageData(reportingDate, count):
+    # generate testing data in memory, this is very useful for unit testing
+    # the new feature of reading from file should be built in parallel to this, so use can choose data sourcing method
+    result = []
+    for i in range(0, count):
+        item = Object()
+        item.reportingDate = reportingDate
+        item.dealID = i
+        item.settlementDate = date(2016, 12, 15)
+        # feasibility test case maturity date is 2046, 12, 15, set to 2017 for unit testing
+        # adding attributes and their values to the data instance
+        setattr(item, "maturityDate", date(2017, 12, 15))
+        setattr(item, "paymentFrequency", 1)
+        setattr(item, "spread", 2.5/100)
+        setattr(item, "currentCoupon", 3.5/100)
+        setattr(item, "remainingAmount", 1000000.0)
+        setattr(item, "amortizationType", "Level Pay")
+        setattr(item, "prepaymentModel", "Mortgage_CPR")
+        setattr(item, "rateIndex", "RI_GBP_LIBOR_1M")
+        setattr(item, "dayCount", "30/360")
+        setattr(item, "productName", "Mortgage_Floating")
+
+        result.append(item)
+    return result
+
+def loadMortgageNewBus():
+    # target month end total balance for 25 months
+    targetBalanaces = [BalTarget(1, 1000000),
+                      BalTarget(2, 1000000),
+                      BalTarget(3, 1000000),
+                      BalTarget(4, 1000000),
+                      BalTarget(5, 1000000),
+                      BalTarget(6, 1000000),
+                      BalTarget(7, 1000000),
+                      BalTarget(8, 1000000),
+                      BalTarget(9, 1000000),
+                      BalTarget(9, 1000000),
+                      BalTarget(10, 1000000),
+                      BalTarget(11, 1000000),
+                      BalTarget(12, 1000000),
+                      BalTarget(13, 1000000),
+                      BalTarget(14, 1000000),
+                      BalTarget(15, 1000000),
+                      BalTarget(16, 1000000),
+                      BalTarget(17, 1000000),
+                      BalTarget(18, 1000000),
+                      BalTarget(19, 1000000),
+                      BalTarget(20, 1000000),
+                      BalTarget(21, 1000000),
+                      BalTarget(22, 1000000),
+                      BalTarget(23, 1000000),
+                      BalTarget(24, 1000000),
+                      BalTarget(25, 1000000)]
+    result = targetBalanaces
+    return result
+
+
+# load run time parameters
+def loadRunParameters():
+    runParameter = {
+        'reportingDate': date(2016, 12, 31),
+        'projectionPeriod': 24,
+        'maxHorizon': 480,
+        'cashflowOutputPath': "C:\IRR_CF_Results\cashflows_output_",
+        'cashflowOutputHeader': "Deal_ID,Payment_Date,Beginning_Balance,Interest_Rate,Scheduled_Total,Interest_Payment,Principal_Payment,Prepayment,Remaining_Balance",
+        'incomeOutputPath': "C:\IRR_CF_Results\income_output_",
+        'incomeOutputHeader': "Deal_ID,Month_End_Date,Income_Accrual,Payment_Date,Interest_Paid",
+        'outputFormat': ".csv",
+        'logOutputPath': "C:\IRR_CF_Results\log_output_",
+        'logOutputHeader': "Start_Time,End_Time,Duration,Product,Existing_Deal_Count,New_Deal_Count,Cashflow_Lines,Income_Lines,Cashflow_File_Size(MB),Income_File_Size(MB)",
+        'shock': 0,
+        # data definition format: product, volume, shock
+        # TD for now, assuming each run is only for a specific market shock, consider whether we want to define shock at the deal level
+        'dataDefinitions': [
+            DataDefinition("IBCA", 20000),
+            DataDefinition("NIBCA", 20000),
+            DataDefinition("Mortgage", 20000),
+            ]
+    # TD transfer other run parameters here
+    }
+    return runParameter
+
+
 '''=========================================== Market Projection Module ============================================'''
 
 
 def linearDistance(x2, x1):
-    result = x2 - x1
+    result = float(x2 - x1)
     return result
-    
+
+
+def datediff(d2, d1):
+    result = float((d2 - d1).days)
+    return result
+
+
+def diff_month(start_date, end_date):
+    return (end_date.year - start_date.year) * 12 + end_date.month - start_date.month
+
 
 def linear_interpolation(x1, y1, x2, y2, x, distanceMeasure = linearDistance):
-    result = y1 + (y2 - y1)/distanceMeasure(x2, x1)*distanceMeasure(x, x1)
+    result = y1 + (y2 - y1)*distanceMeasure(x, x1)/distanceMeasure(x2, x1)
     return result
 
 
-def act356(toDate, fromDate):
+def exponential_interpolation(x1, y1, x2, y2, x, distanceMeasure = datediff):
+    result = y1 * pow((y2 / y1), distanceMeasure(x, x1) / distanceMeasure(x2, x1))
+    return result
+
+
+def isLeap(date):
+    year = date.year
+    return year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+
+
+def incrementalActAct(fromdate, todate):
+    if isLeap(fromdate)==False and isLeap(todate)==False:
+        result = (todate.toordinal() - fromdate.toordinal())/365.0
+    elif isLeap(fromdate)==True and isLeap(todate)==True:
+        result = (todate.toordinal() - fromdate.toordinal()) / 366.0
+    elif isLeap(fromdate) == False and isLeap(todate) == True:
+        result = 1/365.0 + (todate.toordinal() - fromdate.toordinal() -1) / 366.0
+    else:
+        result = 1 / 366.0 + (todate.toordinal() - fromdate.toordinal() - 1) / 365.0
+    return result
+
+
+def act356(fromDate, toDate):
     result = (toDate.toordinal() - fromDate.toordinal()) / 365.0
+    return result
+
+
+def discfactor(spotRate, yearFraction):
+    """Discount factor"""
+    return 1.0/pow((1.0 + spotRate), yearFraction)
+
+
+def discToForward(curDate, discCurDate, nextDate, discNextDate):
+    result = pow(discCurDate / discNextDate, 1 / incrementalActAct(curDate, nextDate)) - 1
     return result
 
 
@@ -155,88 +392,188 @@ class Tenor:
 
 class Curve:
 
-    def __init__(self, id, reportingDate, tenorList, dayCountFunc = act356, interpFunc = linear_interpolation):
-        self.id = id
+    def __init__(self, dealID, reportingDate, tenorList, dayCountFunc = act356, interpFunc = linear_interpolation):
+        self.dealID = dealID
         self.reportingDate = reportingDate
         self.tenorList = tenorList
         self.dayCountFunc = dayCountFunc
         self.tenorDict = { x.date: x.rate for x in tenorList }
+        # tenor dictionary to capture all month end spot rate
         self.tenorDict = {}
+        # discount factor dictionary to capture all month end
+        self.discDict = {}
+        # forward rate dictionary to capture all month end
+        self.forwardDict = {}
         self.interpFunc = interpFunc
         # trigger the init method of the class when initiating a new instance
         self.init()
 
 
-    def shock(self, id, bps):
+    def shock(self, curveID, bps):
+        """Instant Parallel Shock to Spot Curve"""
         # TD this shock approach only works for parallel shock for EVE
         # to be revised with flexibility to imply then shock and none parallel shock
         shockedTenors = map(lambda x: Tenor(x.date, x.rate + bps), self.tenorList)
-        result = Curve(id, self.reportingDate, shockedTenors, self.dayCountFunc, self.interpFunc)
+        result = Curve(curveID, self.reportingDate, shockedTenors, self.dayCountFunc, self.interpFunc)
         return result
 
 
     def init(self):
+        """Expand the spot curve to monthly tenor until 30 years, generate month end discount factors and forward rates"""
         curDate = self.reportingDate
         endDate = curDate.replace(year = curDate.year + 30)
-        nextIndex = 0
-        prevTenor = self.tenorList[nextIndex-1]
-        nextTenor = self.tenorList[nextIndex] 
+        prevIndex = 0
+        nextIndex = 1
+        prevTenor = self.tenorList[prevIndex]
+        nextTenor = self.tenorList[nextIndex]
         maxIndex = len(self.tenorList) - 1
         while curDate <= endDate:
             if curDate >= self.tenorList[nextIndex].date and nextIndex < maxIndex:
                 nextIndex += 1
+                prevIndex += 1
                 prevTenor = nextTenor
                 nextTenor = self.tenorList[nextIndex]
+            else:
+                # Perform interpolation on rate
+                self.tenorDict[curDate] = self.interpFunc(prevTenor.date,prevTenor.rate,nextTenor.date,nextTenor.rate,curDate,self.dayCountFunc)
+                self.discDict[curDate] = discfactor(self.tenorDict[curDate], self.dayCountFunc(self.reportingDate, curDate))
+                if curDate > self.reportingDate:
+                    self.forwardDict[prevDate] = discToForward(prevDate, self.discDict[prevDate], curDate, self.discDict[curDate])
 
-            # Perform interpolation
-            self.tenorDict[curDate] = self.interpFunc(
-                prevTenor.date, 
-                prevTenor.rate, 
-                nextTenor.date, 
-                nextTenor.rate, 
-                curDate,
-                self.dayCountFunc)
-            curDate = curDate + timedelta(days = 1)
+                prevDate = curDate
+                curDate = curDate + relativedelta(day = 1, months = 2, days=-1)
 
-    def df(self, date):
-        """Discount factor"""
-        # pow(x,y) returns x to the power of y
-        result = 1.0/pow((1.0 + self.tenorDict[date]), self.dayCountFunc(date, self.reportingDate))
-        return result
 
-    def fr(self, fromDate, toDate, annualise = True):
+    def discfactor(self, curDate):
         """Returns the annualised forward rate between two dates"""
-        if annualise:
-            annualisationFactor = 1.0/self.dayCountFunc(toDate, fromDate)
-        else:
-            annualisationFactor = 1.0
-        result = pow(self.df(fromDate) / self.df(toDate), annualisationFactor) - 1
+        prevMEDate = curDate + relativedelta(day=1, days=-1)
+        curMEDate = curDate + relativedelta(day=1, months=1, days=-1)
+        prevMEDict = self.discDict[prevMEDate]
+        curMEDict = self.discDict[curMEDate]
+        result = exponential_interpolation(prevMEDate, prevMEDict, curMEDate, curMEDict, curDate, distanceMeasure=datediff)
         return result
 
-    def cr(self, spread, fromDate, toDate, annualise):
-        result = self.fr(fromDate, toDate, annualise) + spread
+    def forwardRate(self, fromDate, toDate):
+        result = discToForward(fromDate, self.discfactor(fromDate), toDate, self.discfactor(toDate))
         return result
 
     def __add__(self, other):
-        """Defines addition of two curves - used to shock"""
+        """Defines addition of two curves - used to for instant non parallel shock"""
         # curve1.__add__(curve2) defines the behaviour of curve1 + curve2
         pass
 
 
 class Scenario:
-    
+
     def __init__(self, reportingDate, curve):
         self.reportingDate = reportingDate
         self.curve = curve
 
 
-'''=========================================== Contractual Cashflow Module ========================================='''
+class StandardRateIndex:
+    # create rate index object to store month end index values
+    # if index object already contains rate for a repricing date, then read directly, otherwise calculate
+    # TD performance expansion to only caluculate month end, then linearly interpolate
+    def __init__(self, rateIndexName, marketCurve, tenorPoint, curveDict, startingDate = None, startingRate = None):
+        self.rateIndexName = rateIndexName
+        # a index object dictionary is created first to convert strings into objects
+        self.marketCurve = curveDict[marketCurve]
+        self.tenorPoint = tenorPoint
+        self.rateIndexType = 'standard'
+        self.startingDate = startingDate
+        self.startingRate = startingRate
+        self.projection = {}
+        self.projection[self.startingDate] = self.startingRate
+
+    def calculateNew(self, projectionDate):
+        """Add period ending rate on the projection date to rate projection results"""
+        fromDate = projectionDate + relativedelta(months=-self.tenorPoint)
+        toDate = projectionDate
+        newRate = self.marketCurve.forwardRate(fromDate, toDate)
+        self.projection[projectionDate] = newRate
+
+    def rateExist(self, projectionDate):
+        """Check if rate forecast already exists for the projection date"""
+        if projectionDate in self.projection:
+            return True
+        else:
+            return False
+
+    def getRate(self, projectionDate):
+        """Generate the period ending rate on the projection date"""
+        if self.rateExist(projectionDate) == False:
+            # if no rate exists for the required date, calculated the rate and store into projection dict then output rate
+            self.calculateNew(projectionDate)
+        return self.projection[projectionDate]
 
 
-class FloatLeg:
+class ZeroIndex(StandardRateIndex):
+    def __init__(self, rateIndexName):
+        self.rateIndexName = rateIndexName
+        self.rateIndexType = 'fixed'
+
+    def getRate(self, projectionDate):
+        return 0
+
+
+class PassOnIndex(StandardRateIndex):
+
+    def __init__(self, rateIndexName, baseIndex, passOn, indexDict, startingDate = None, startingRate = None):
+        self.rateIndexName = rateIndexName
+        self.baseIndex = indexDict[baseIndex]
+        self.rateIndexType = 'pass on'
+        self.passOn = passOn
+        self.startingDate = startingDate
+        self.startingRate = startingRate
+        self.projection = {}
+        self.projection[self.startingDate] = self.startingRate
+
+    def calculateNew(self, projectionDate):
+        """Rate passthrough derivation"""
+        previousProjectionDate = projectionDate + relativedelta(months=-1)
+        if previousProjectionDate in self.projection:
+            # if previous managed rate value exists in projection dict, then calculate for current period
+            previousBaseRate = self.baseIndex.getRate(previousProjectionDate)
+            currentBaseRate = self.baseIndex.getRate(projectionDate)
+            baseRateMove = currentBaseRate - previousBaseRate
+            newRate = self.projection[previousProjectionDate] + self.passOn * baseRateMove
+            # add rate for projectoin date into projection dictionary
+            self.projection[projectionDate] = newRate
+        else:
+            # find the rate value for the latest known date, then iterate until reaching projectionDate
+            lastKnownDate = max(self.projection.iterkeys())
+            intermediateDate = lastKnownDate + relativedelta(months=1)
+            while intermediateDate <= projectionDate:
+                self.calculateNew(intermediateDate)
+                intermediateDate = intermediateDate + relativedelta(months=1)
+
+
+class Rate():
+
+    def __init__(self, annualRate, dayCount):
+        self.annualRate = annualRate
+        self.dayCount = dayCount
+
+    def convertByConvention(self):
+        if self.dayCount == "30/360":
+            return self.annualRate / 12
+
+
+'''=========================================== Cashflow Module ========================================='''
+
+def TransactionToProduct(transaction):
+
+    if transaction.amortizationType == "Level Pay":
+        product = LevelPay(transaction)
+    else:
+        product = Bullet(transaction)
+    return product
+
+
+class Product:
 
     def __init__(self, transaction):
-        self.id = transaction.id
+        self.dealID = transaction.dealID
         # TD revise this to originationDate to align with terminology
         self.settlementDate = transaction.settlementDate
         self.maturityDate = transaction.maturityDate
@@ -244,13 +581,16 @@ class FloatLeg:
         self.paymentFrequency = transaction.paymentFrequency
         self.remainingAmount = transaction.remainingAmount
         self.spread = transaction.spread
+        self.rateIndex = transaction.rateIndex
         self.payDates = []
         self.initPayDates()
+        self.currentCoupon = transaction.currentCoupon
+        self.prepaymentModel = transaction.prepaymentModel
+        self.dayCount = transaction.dayCount
+
 
     def initPayDates(self):
-        # TD should this be reporting date instead, since we won't go back into the past?
-        # consider the need to work out previous pay date for the first payment calculation
-        # pay dates should be shared between fixed / variable products
+        # TD consider separate logic for pay / repricing date derivation
         stopDate = self.settlementDate
         curDate = self.maturityDate
         # TD 0604 added the maturityDate to the payDates list
@@ -259,45 +599,26 @@ class FloatLeg:
             curDate = curDate + relativedelta(months = -self.paymentFrequency)
             # Add modified following
             # TD when will this condition be false? given the parent while condition
-            if curDate >= stopDate:
-                self.payDates.append(curDate)
+            self.payDates.append(curDate)
         self.payDates.reverse()
 
     def getCashflows(self, reportingDate, curve):
-        # TBC how is this used? given we have the same method under LevelPay
+        # TBC what should be the default method here? (Bullet or Security Schedule?)
         cashflows = []
-        for i in range(0, len(self.payDates) - 1):
-            curDate = self.payDates[i]
-            if curDate <= reportingDate:
-                # continue to the next for iteration, break will break out the loop completely
-                continue
-            # at this point curDate > reportingDate
-            prevDate = self.payDates[i-1]
-            if prevDate < reportingDate:
-                prevDate = reportingDate
-            # need to separate out logic on payment dates from reset dates
-            # TD this sees to be forward rate * notional, does that include customer margin?
-            payment = curve.fr(prevDate, curDate) * self.remainingAmount
-            cashflows.append(Cashflow(self.id, curDate, payment, None, None))
         return cashflows
 
 
-class LevelPay(FloatLeg):
-    # LevelPay is a subclass of the FloatLeg class, can use print(help(LevelPay)) to see resolution order
+class LevelPay(Product):
+    # LevelPay is a subclass of the Product class, can use print(help(LevelPay)) to see resolution order
     # variables re-specified in subclass will overwrite their values in the parent class
-    # TD revise to take in data object without explicitly specific all attributes
 
     def __init__(self, transaction):
-        # added so the LevelPay class can take in additional parameters than its parent class FloatLeg
-        # alternative is super().__init__(id, settlementDate, maturityDate, paymentFrequency, notional, spread)
-        FloatLeg.__init__(self, transaction)
-        # new parameter added
-        # TD should this be curCoupon?
-        self.firstCoupon = transaction.firstCoupon
-        self.prepaymentModel = transaction.prepaymentModel
+        # added so the LevelPay class can take in additional parameters than its parent class Product
+        # alternative is super().__init__(transaction)
+        Product.__init__(self, transaction)
 
 
-    def getCashflows(self, reportingDate, curve):
+    def getCashflows(self, reportingDate, indexDict):
         remainingAmount = self.remainingAmount
         # getCashflows method is re-defined for Level Pay product
         cashflows = []
@@ -306,51 +627,98 @@ class LevelPay(FloatLeg):
         # TD 0607 instantiate prepayment model for the transaction, to cater for behavioural life, need to input age
         behModel = loadBehModel(self.prepaymentModel)
         smm = behModel.smm()
-        # TD 0604 changed end range to n, as n-1 was giving 2 less cashflows vs required
+
+
         for i in range(0, n):
             curDate = self.payDates[i]
-            if curDate <= reportingDate:
-                continue
             if i == 0:
+                # TD purpose?
                 prevDate = reportingDate
             else:
                 prevDate = self.payDates[i-1]
-            if prevDate < reportingDate:
-                prevDate = reportingDate
-            
-            if i == 1:
-                # TD this works if we count from reporting date, not origination, change to use current coupon
-                # conversion to monthly equivalent is done at data load
-                r = self.firstCoupon
+            if curDate <= reportingDate:
+                continue
+            elif prevDate <= reportingDate:
+                # TD need to separate reset from payment timing
+                # for first payment, use currentCoupon from data, derive from curve for later coupons
+                annualRate = self.currentCoupon
             else:
                 # customer rate from the previous period
                 # conversion of spread to monthly equivalent is done at data load
-                r = curve.cr(self.spread, prevDate, curDate, False)
-            # TD 0604 changed formula from n to n-1 to correct level pay result
+                annualRate = indexDict[self.rateIndex].getRate(curDate) + self.spread
+
+            r = Rate(annualRate,  self.dayCount).convertByConvention()
+
             A = pow(1 + r, n-1)
-            # TD consider keeping these results (eg as lists?)
+            # TD consider keeping these intermediate results
             # kept beginning month balance for later output
             beginningAmount = remainingAmount
             interest = beginningAmount * r
             payment = beginningAmount * r * A / (A-1)
             principal = payment - interest
             remainingBeforePrepay = beginningAmount - principal
-            # TD 0608 removed hard coded smm
-            # smm = 1.0 - ((1.0 - 0.12) ** (1.0 / 12.0))
             prepayment = smm * remainingBeforePrepay
             remainingAmount = remainingBeforePrepay - prepayment
             n = n - 1
             # 0604 added more output values for testing
-            cashflows.append(Cashflow(self.id, curDate, beginningAmount, r, principal, prepayment, interest, remainingAmount))
-        return cashflows        
+            cashflows.append(Cashflow(self.dealID, curDate, beginningAmount, r, principal, prepayment, interest, remainingAmount))
+        return cashflows
 
+
+class Bullet(Product):
+
+    def __init__(self, transaction):
+        # alternative is super().__init__(transaction)
+        Product.__init__(self, transaction)
+
+
+    def getCashflows(self, reportingDate, indexDict):
+        remainingAmount = self.remainingAmount
+        cashflows = []
+        n = len(self.payDates)
+        # TD 0607 instantiate prepayment model for the transaction, to cater for behavioural life, need to input age
+        # TD different approach from loading YC / RI, to establish consistency
+        behModel = loadBehModel(self.prepaymentModel)
+
+        # TD 0604 changed end range to n, as n-1 was giving 2 less cashflows vs required
+        for i in range(0, n):
+            curDate = self.payDates[i]
+            if i == 0:
+                prevDate = reportingDate
+            else:
+                prevDate = self.payDates[i - 1]
+
+            if curDate <= reportingDate:
+                continue
+            elif prevDate <= reportingDate:
+                # for first payment, use currentCoupon from data, derive from curve for later coupons
+                annualRate = self.currentCoupon
+            else:
+                annualRate = indexDict[self.rateIndex].getRate(curDate) + self.spread
+
+            r = Rate(annualRate, self.dayCount).convertByConvention()
+            beginningAmount = remainingAmount
+            interest = beginningAmount * r
+            if curDate < self.maturityDate:
+                principal = 0
+            else:
+                principal = beginningAmount
+            age = diff_month(self.settlementDate, self.payDates[i])
+            remainingAmount = beginningAmount - principal
+            smm = behModel.smm(age)
+            prepayment = smm * remainingAmount
+            remainingAmount = remainingAmount - prepayment
+            n = n - 1
+            # 0604 added more output values for testing
+            cashflows.append(Cashflow(self.dealID, curDate, beginningAmount, r, principal, prepayment, interest, remainingAmount))
+        return cashflows
 
 def ToLevelPay(line):
     # TD what's the difference between this ToLevelPay and the one below?
     return None
 
 
-'''=========================================== Behavioural Cashflow Module ========================================='''
+'''=========================================== Behavioural Model Module ========================================='''
 
 
 class BehModel:
@@ -362,11 +730,14 @@ class BehModel:
 
     def smm(self, age = 1):
         result = 0.0
+        # TD have model types as sub classes so we don't need to change existing class, instead of expanding existing, just create new sub objects
         if self.modelType == "CPR":
             result = 1.0 - pow((1.0 - self.modelValue), 1.0 /12.0)
-        if self.modelType == "Beh_Life":
-            # age here is assumed to be updated after the cashflow cal
-            result = 1.0 / (self.modelValue - age)
+        elif self.modelType == "Beh_Life":
+            # age here is assumed to be number of months since origination
+            result = 1.0 / (self.modelValue - age + 1)
+        else:
+            result = 0
         return result
 
 
@@ -375,45 +746,46 @@ class BehModel:
 
 class IncomeAccrual:
 
-    def __init__(self, cashflowCurrent, transaction):
+    # 170720 modified to take in cashflows list and output incomes list, instead of only taking in a single cashflow
+    def __init__(self, cashflows, transaction):
 
-        self.cashflowCurrent = cashflowCurrent
+        self.cashflows = cashflows
         self.paymentFrequency = transaction.paymentFrequency
-
-        # TBC what are the principles behind which should be attributes vs temp variables
-        self.id = cashflowCurrent.id
-        self.paymentDate = cashflowCurrent.paymentDate
-        self.interest = cashflowCurrent.interest
-
-        self.currentPaymentDate = cashflowCurrent.paymentDate
-        self.previousPaymentDate = self.currentPaymentDate + relativedelta(months = - self.paymentFrequency)
-        self.paymentDays = (self.currentPaymentDate - self.previousPaymentDate).days
-
-        self.perDayIncome = self.interest / self.paymentDays
 
     def getIncomes(self):
 
-        # first month end date is the month end date of the previous payment
-        monthEndDate = self.previousPaymentDate + relativedelta(day=1, months=+1, days=-1)
-
         incomes = []
+        for cashflow in self.cashflows:
+            dealID = cashflow.dealID
+            paymentDate = cashflow.paymentDate
+            interest = cashflow.interest
+    
+            currentPaymentDate = cashflow.paymentDate
+            previousPaymentDate = currentPaymentDate + relativedelta(months=- self.paymentFrequency)
+            paymentDays = (currentPaymentDate - previousPaymentDate).days
+    
+            perDayIncome = interest / paymentDays
+        
+            # first month end date is the month end date of the previous payment
+            monthEndDate = previousPaymentDate + relativedelta(day=1, months=+1, days=-1)
 
-        # 0613 the accrual system will back calculate monthly income even for months prior to reporting date
-        # this is useful during build, but can build a stopper condition for better performance
-        for i in range(0, self.paymentFrequency + 1):
-            if monthEndDate < self.previousPaymentDate + relativedelta(day=1, months=+2, days=-1):
-                # accrual in the previous payment month
-                daysAccrued = monthEndDate.day - self.previousPaymentDate.day
-            elif monthEndDate >= self.currentPaymentDate:
-                # if next month end is the current payment month, then proportional accrual
-                daysAccrued = self.currentPaymentDate.day
-            else:
-                # if next month is before the current payment month, then full month accrual
-                daysAccrued = monthEndDate.day
-            monthAccrual = daysAccrued * self.perDayIncome
-            # write output to incomes list
-            incomes.append(Income(self.id, monthEndDate, monthAccrual, self.paymentDate, self.interest))
-            monthEndDate = monthEndDate + relativedelta(day=1, months=+2, days=-1)
+            # 0613 the accrual system will back calculate monthly income even for months prior to reporting date
+            # this is useful during build, but can build a stopper condition for better performance
+            # payment frequency is the number of months between payments
+            for i in range(0, self.paymentFrequency + 1):
+                if monthEndDate < previousPaymentDate + relativedelta(day=1, months=+2, days=-1):
+                    # accrual in the previous payment month
+                    daysAccrued = monthEndDate.day - previousPaymentDate.day
+                elif monthEndDate >= currentPaymentDate:
+                    # if next month end is the current payment month, then proportional accrual
+                    daysAccrued = currentPaymentDate.day
+                else:
+                    # if next month is before the current payment month, then full month accrual
+                    daysAccrued = monthEndDate.day
+                monthAccrual = daysAccrued * perDayIncome
+                # write output to incomes list
+                incomes.append(Income(dealID, monthEndDate, monthAccrual, paymentDate, interest))
+                monthEndDate = monthEndDate + relativedelta(day=1, months=+2, days=-1)
 
         return incomes
 
@@ -423,29 +795,34 @@ class IncomeAccrual:
 
 class NewBusiness:
 
-    def __init__(self, payDate, remainingBalance, targetBalance, curve):
+    def __init__(self, payDate, remainingBalance, targetBalance, transaction, indexDict):
         # input attributes
         self.payDate = payDate
         self.remainingBalance = remainingBalance
         self.targetBalance = targetBalance
 
         # derived attributes
-        # TBC whether to have methods adding attributes, given all are required
-        # TD contractual features for new vol is assumption driven, can add feature to derive from data
-        self.id = payDate.strftime('%Y%m%d')
+        # contractual features for new vol is data driven, can add feature to switch between assumption and adta driven
+        self.dealID = payDate.strftime('%Y%m%d')
         self.origDate = self.payDate
         self.settlementDate = self.payDate
-        self.maturityDate = self.origDate + relativedelta(months = 12)
-        self.paymentFrequency = 1
-        self.notional = self.targetBalance - self.remainingBalance
-        self.spread = 2.5 / 100 / 12
-        # TD need to correct first coupon to current coupon
-        # TD build new vol rate derivation
-        self.firstCoupon = curve.cr(self.spread, self.origDate, self.origDate + relativedelta(months = 1), False)
-        # TD need to correct to current outstanding balance and original balance (if required)
+        self.originalMaturity = diff_month(transaction.settlementDate, transaction.maturityDate)
+        self.maturityDate = self.origDate + relativedelta(months = self.originalMaturity)
         self.remainingAmount = self.targetBalance - self.remainingBalance
-        self.prepaymentModel = 'varMortgageCPR'
         self.settlementDate = self.payDate
+
+        self.paymentFrequency = transaction.paymentFrequency
+        self.dayCount = transaction.dayCount
+        self.rateIndex = transaction.rateIndex
+        self.spread = transaction.spread
+        # TD 170628 temp work around to force new NML to be bullets
+        if transaction.prepaymentModel in ('NIBCA_Beh_Life', 'IBCA_Beh_Life'):
+            self.prepaymentModel = 'none'
+        else:
+            self.prepaymentModel = transaction.prepaymentModel
+        self.amortizationType = transaction.amortizationType
+
+        self.currentCoupon = indexDict[transaction.rateIndex].getRate(self.origDate + relativedelta(months=self.paymentFrequency)) + self.spread
 
 
 class BalTarget:
@@ -453,6 +830,12 @@ class BalTarget:
     def __init__(self, period, balance):
         self.period = period
         self.balance = balance
+
+
+# migration functionality postponed 170626 as per Stephen / Arnau's comment
+# class BalMigration:
+#
+#     def __init__(self, migrationSource, migrationTarget,  )
 
 
 '''============================================== Results Output Module ============================================'''
@@ -463,8 +846,8 @@ class Cashflow:
     # TD write out with csv headings, will this affect how pyxll reads the results?
     # 0604 added more output values for testing
 
-    def __init__(self, id, paymentDate, beginning, rate, principal, prepayment, interest, remaining):
-        self.id = id
+    def __init__(self, dealID, paymentDate, beginning, rate, principal, prepayment, interest, remaining):
+        self.dealID = dealID
         self.paymentDate = paymentDate
         self.beginning = beginning
         self.rate = rate * 100 * 12     # rate is converted from decimal to % for testing
@@ -475,309 +858,358 @@ class Cashflow:
         self.remaining = remaining
 
     def AsCsv(self):
-        result = "{0},{1},{2},{3},{4},{5},{6},{7},{8}".format(self.id, self.paymentDate, self.beginning, self.rate, self.scheduled, self.interest, self.principal, self.prepayment, self.remaining)
+        result = "{0},{1},{2},{3},{4},{5},{6},{7},{8}".format(self.dealID, self.paymentDate, self.beginning, self.rate, self.scheduled, self.interest, self.principal, self.prepayment, self.remaining)
         # 0610 removed [] around result to be tested
+        # TD ability to define output fields differently for runs, via user parameter file
         return [result]
 
 
 class Income:
 
-    def __init__(self, id, monthEndDate, incomeAccrued, paymentDate, interest):
-        self.id = id
+    def __init__(self, dealID, monthEndDate, incomeAccrued, paymentDate, interest):
+        self.dealID = dealID
         self.monthEndDate = monthEndDate
         self.incomeAccrued = incomeAccrued
         self.paymentDate = paymentDate
         self.interest = interest
 
     def AsCsv(self):
-        result = "{0},{1},{2},{3},{4}".format(self.id, self.monthEndDate, self.incomeAccrued, self.paymentDate, self.interest)
+        result = "{0},{1},{2},{3},{4}".format(self.dealID, self.monthEndDate, self.incomeAccrued, self.paymentDate, self.interest)
         # 0610 removed [] around result to be tested
         return [result]
 
 
 
 
+
+
+'''======================================== Create Testing Data ========================================='''
+
+class DataDefinition:
+
+    def __init__(self, product, volume):
+        self.product = product
+        self.volume = volume
+
+
+def CreateData(reportingDate, dataDefinitions):
+
+    # master lists to store transaction data and their corresponding target balances
+    localTransactionData = []
+    localTargetBalanceData = []
+
+    for dataDefinition in dataDefinitions:
+        product = dataDefinition.product
+        volume = dataDefinition.volume
+        if product == "NIBCA":
+            newData = CreateNIBCAData(reportingDate, volume)
+            # list of balance target instances
+            # this should be a deal level data load later on
+            newTargetBal = [loadNIBCANewBus()]*volume
+        elif product == "IBCA":
+            newData = CreateIBCAData(reportingDate, volume)
+            newTargetBal = [loadIBCANewBus()]*volume
+        elif product == "Mortgage":
+            newData = CreateMortgageData(reportingDate, volume)
+            newTargetBal = [loadMortgageNewBus()]*volume
+        localTransactionData = localTransactionData + newData
+        localTargetBalanceData = localTargetBalanceData + newTargetBal
+
+
+    # create combined list of objects, so each object of the master data list has the transaction and traget data
+    masterDataList = []
+    # pair up transaction data with its target balance, into a list of inputs, ready for ingestion by beam
+    # beam requires each element in the list to contain full set of inputs required for parallel distribution
+    for i in range(0, len(localTransactionData)):
+        transactionLevelData = Object()
+        # transactions is a list of transactions with position 0 the existing the new
+        setattr(transactionLevelData, "transactions", [localTransactionData[i]])
+        # target balance is stored at the existing deal level
+        # each existing deal and its child deals share the same target balance list
+        setattr(transactionLevelData, "targetBalance", localTargetBalanceData[i])
+        masterDataList.append(transactionLevelData)
+    return masterDataList
+
+
+
+
 '''======================================== Google Cloud Integration Module ========================================='''
 
+# the overarching design is that the transactionLevelData object gets passed through the pipeplie
+# at each stage of the pipeline, additional attributes are added containing results from that stage
 
-def ToLevelPay(data):
-    value = LevelPay(data)
-    # set will only affect the instance not the class that created the instance
-    setattr(data, "product", value)
-    return data
+def AddTransaction(transactionLevelData, transaction):
+    if hasattr(transactionLevelData, 'transactions'):
+        transactionLevelData.transactions.append(transaction)
+    else:
+        setattr(transactionLevelData, "transactions", [transaction])
+    return transactionLevelData
 
 
-def runCF():
+def AddProduct(transactionLevelData, i):
+    # initiate transaction level data, only the data (at position 0) is requried as the target balance is for FutureProduct
+    transaction = transactionLevelData.transactions[i]
+    product = TransactionToProduct(transaction)
 
-    '''run entire process'''
-    '''initiate run time variables'''
+    if hasattr(transactionLevelData, 'Products'):
+        transactionLevelData.Products.append(product)
+    else:
+        setattr(transactionLevelData, "Products", [product])
+    return transactionLevelData
 
-    runTime = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-    reportingDate = date(2016, 12, 31)
-    # spot curve generated in memory, TD load from local / how to switch easily
-    curve = getCurve(reportingDate)
-    # list of balance target instances (period, balance) for 11 month end periods
-    NIItargetBal = loadNewBus()
-    # dummy data generated in memory, changed data volume to 1 transaction for unit testing, , TD load from local / how to switch easily
-    # data generate is done as a list of objects, with each object having contractual features as properties
-    # take first transaction
-    # TD loop through future transactions
-    localData = CreateData(reportingDate, 1)[0]
-    transaction = localData
-    # create list to contain cumulative remaining balance
-    # TD consider better methods of capturing info, a list of 23 0 values
-    remainingTotal = []
-    projectionPeriod = 24
-    # TD remaining total is set to long term during build (ie capture full cf for all new deals)
-    # this approach can be revised so new bus cashflows will truncate at the projection period above
-    maxHorizon = 480
-    for i in range(0, maxHorizon-1):
-        remainingTotal.append(0)
-    # initiate csv files to store output
-    cashflowFile = r"C:\IRR_CF_Results\cashflows_output_" + runTime + '.csv'
-    cashflowOutput = open(cashflowFile, "a+")
-    incomeFile = r"C:\IRR_CF_Results\income_output_" + runTime + '.csv'
-    incomeOutput = open(incomeFile, "a+")
-    # add field names to output files
-    cashflowOutput.write("id,Payment_Date,Beginning_Balance,Interest_Rate,Scheduled_Total,Interest_Payment,Principal_Payment,Prepayment,Remaining_Balance" + "\n")
-    incomeOutput.write("id,Month_End_Date,Income_Accrual,Payment_Date,Interest_Paid" + "\n")
+def AddCashflows(transactionLevelData, i, reportingDate, indexDict):
+    product = transactionLevelData.Products[i]
+    # cashflows is a list of cashlfow object, each object has pay date, pay amount, etc
+    cashflows = product.getCashflows(reportingDate, indexDict)
 
-    '''cashflow calculation'''
+    if hasattr(transactionLevelData, 'CashflowResults'):
+        transactionLevelData.CashflowResults.append(cashflows)
+    else:
+        setattr(transactionLevelData, "CashflowResults", [cashflows])
+    return transactionLevelData
 
-    for i in range(0, projectionPeriod + 1):
-        # new business for the final projection period is required to account for the full monthly income
-        # create level pay object (ie loading all inputs into CF engine
-        levelpay = LevelPay(transaction)
-        # cashflows is a list of instances, each contains all the cashflow and balance amounts on that pay date
-        cashflows = levelpay.getCashflows(reportingDate, curve)
+def AddIncomes(transactionLevelData, i):
+    cashflows = transactionLevelData.CashflowResults[i]
+    transaction = transactionLevelData.transactions[i]
+    # incomes is a list of income object, each object has calendar date, accrual amount, etc
+    incomes = IncomeAccrual(cashflows, transaction).getIncomes()
 
-        ''' write existing cashflow results into cashflow output csv'''
-        for k in range(0, len(cashflows)):
-            cashflowOutput.write(cashflows[k].AsCsv()[0] + "\n")
+    if hasattr(transactionLevelData, 'IncomesResults'):
+        transactionLevelData.IncomesResults.append(incomes)
+    else:
+        setattr(transactionLevelData, "IncomesResults", [incomes])
+    return transactionLevelData
 
-            incomeAccrual = IncomeAccrual(cashflows[k], transaction)
-            incomes = incomeAccrual.getIncomes()
-            for l in range(0, len(incomes)):
-                incomeOutput.write(incomes[l].AsCsv()[0] + "\n")
+def AddNewVolumes(transactionLevelData, runParameters, indexDict):
+    projectionPeriod = runParameters['projectionPeriod']
+    maxHorizon = runParameters['maxHorizon']
+    reportingDate = runParameters['reportingDate']
+    # cashflowsResults is the Cashflows attribute of the transaction level data object
+    # it's a list (by individual existing / new deals) of lists (by payment timing) of object (individual cashflow)
+    cashflowsResults = transactionLevelData.CashflowResults
+    transaction = transactionLevelData.transactions[0]
 
-        '''update total remaining balance'''
-        # store remaining balance into remaining total list
+    # create list to contain remaining balance
+    remainingTotal = [0]*maxHorizon
+
+    # loop through future projection periods, creating new business each period
+    # complete projection of each deal is calculated at the period of its origination
+    # TD this deal by deal method should be evaluated against period by period
+    NIItargetBal = transactionLevelData.targetBalance
+    for i in range(0, projectionPeriod):
+
+        monthEndTarget = NIItargetBal[i].balance
+        cashflows = cashflowsResults[i]
+        # payment date is the first
+        # TD how does this work if payment frequency is quarterly or longer?
+        payDate = cashflows[0].paymentDate
+
+        # store remaining amounts of  transaction into remaining total list
         for j in range(i, len(cashflows) + i):
             remainingTotal[j] += cashflows[j - i].remaining
-
-        '''NII create new business'''
-
-        # period 1 existing CF results
-        existingResult = cashflows[0]
-        # TD consider storing payment date into the total list (so both dates and amounts)
-        payDate = existingResult.paymentDate
         remaining = remainingTotal[i]
 
-        # period 1 target month end balance
-        monthEndTarget = NIItargetBal[i].balance
-
         # create new business transaction data
-        newTransaction = NewBusiness(payDate, remaining, monthEndTarget, curve)
+        newTransaction = NewBusiness(payDate, remaining, monthEndTarget, transaction, indexDict)
         # set current transaction to new transaction for next iteration
         transaction = newTransaction
+
         # TD rebuild reporting date dependency (eg a separate evaluation date)
         reportingDate += relativedelta(day=1, months=+2, days=-1)
 
-    '''close output file after all cashflows are appended'''
+        AddTransaction(transactionLevelData, transaction)
+        AddProduct(transactionLevelData, i+1)
+        AddCashflows(transactionLevelData, i+1, reportingDate, indexDict)
+        AddIncomes(transactionLevelData, i+1)
+
+    return transactionLevelData
+
+
+
+# to dos
+'''
+def ToDo():
+
+
+    # output income results
+    incomeOutput.write(incomes[l].AsCsv()[0] + "\n")
+
+    # update log variable for existing deal count
+    existingDealCount += 1
+
+    # add counter to log variable
+    cashflowLineCount += 1
+
+    # add counter to log variable
+    incomeLineCount += 1
+
+    # update log variable for new deal count
+    newDealCount += 1
+
+
+    endTime = datetime.now()
+    duration = endTime - startTime
+
+    #close output file after all cashflows are appended
     cashflowOutput.close()
     incomeOutput.close()
 
+    #calculate output file size, in MB
+    cashflowFileSize = float(stat(cashflowFile).st_size) / (1024 ** 2)
+    incomeFileSize = float(stat(incomeFile).st_size) / (1024 ** 2)
 
-# 0609 block out pipeline during testing
-def google():
-    # re-stated reporting date to protect from code above
-    reportingDate = date(2016, 12, 31)
-    data = CreateData(reportingDate, 1)
-    pp = beam.Pipeline('DirectRunner')
+    #update log file
+    logContent = "{0},{1},{2},{3},{4},{5},{6},{7},{8},{9}".format(str(startTime), str(endTime), str(duration), product,
+                                                                  existingDealCount, newDealCount, cashflowLineCount,
+                                                                  incomeLineCount, cashflowFileSize, incomeFileSize)
+    logOuput.write(logContent + "\n")
+    # TD write output file size into log
 
-    '''
-    the overall flow of the cashflow processes
-    1. load in market data
-    2. load in transaction data
-    3. load in business assumption (eg behaviouralisation, prepayment, new business ...)
-    4. calculate contractual cashflow
-    5. calculate behavioural cashflow
-    6. calculate FTP (not in scope for initial feasibility assessment)
-    7. generate new business (for NII runs only)
-    '''
+    logOuput.close()
+
+    # initiate csv files to store output
+    outputFormat = runParameters['outputFormat']
+    cashflowFile = runParameters['cashflowOutputPath'] + product + "_" + runTime + outputFormat
+    cashflowOutput = open(cashflowFile, "a+")
+    incomeFile = runParameters['incomeOutputPath'] + product + "_" + runTime + outputFormat
+    incomeOutput = open(incomeFile, "a+")
+    # initiate csv file for logging at the product level
+    # TD consider what variables to log and at what level
+    logFile = runParameters['logOutputPath'] + outputFormat
+    logOuput = open(logFile, "a+")
+
+    # add field names to output files
+    cashflowOutput.write(runParameters['cashflowOutputHeader'] + "\n")
+    incomeOutput.write(runParameters['incomeOutputHeader'] + "\n")
+    logOuput.write(runParameters['logOutputHeader'] + "\n")
+'''
+
+def run(runner):
+    # initial log variables
+    startTime = datetime.now()
+    existingDealCount = 0
+    newDealCount = 0
+    cashflowLineCount = 0
+    incomeLineCount = 0
+
+    runTime = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+
+    '''initiate run time variables'''
+    runParameters = loadRunParameters()
+    reportingDate = runParameters['reportingDate']
+    shock = runParameters['shock']
+
+    # initiate curve and index objects
+    curveDict = createCurveDict(reportingDate, shock)
+    indexDict = createIndexDict(reportingDate, curveDict)
+
+
+    # create test data
+    # TD replace by a data load / processing step
+    dataDefinitions = runParameters['dataDefinitions']
+    data = CreateData(reportingDate, dataDefinitions)
+
+    # configure output / runner options based on user input
+    if runner == 'DataflowRunner':
+        outputCashflowPath = 'gs://sweet-gooseberry-upload/IRR_CF_Engine/output/existing-cashflow-results' + runTime + '.txt'
+        outputIncomePath = 'gs://sweet-gooseberry-upload/IRR_CF_Engine/output/existing-income-results' + runTime + '.txt'
+    else:
+        outputCashflowPath = 'C:/Users/charl/Google Drive/10. Coding/9. IRR CF Engine Python/Jupyter_Practice/output/cashflow-' + runTime + '.csv'
+        outputIncomePath = 'C:/Users/charl/Google Drive/10. Coding/9. IRR CF Engine Python/Jupyter_Practice/output/income-' + runTime + '.csv'
+
+    parser = argparse.ArgumentParser()
+
+    # input not required
+    # parser.add_argument('--input',
+    # dest='input',
+    # default='gs://dataflow-samples/shakespeare/kinglear.txt',
+    # help='Input file to process.')
+    parser.add_argument('--outputCashflow',
+                        dest='outputCashflow',
+                        # CHANGE 1/5: The Google Cloud Storage path is required
+                        # for outputting the results.
+                        # output paths for dataflow / direct runner are configured above
+                        default=outputCashflowPath,
+                        help='Output file to write Cashflow results to.')
+    parser.add_argument('--outputIncome',
+                        dest='outputIncome',
+                        # CHANGE 1/5: The Google Cloud Storage path is required
+                        # for outputting the results.
+                        # output paths for dataflow / direct runner are configured above
+                        default=outputIncomePath,
+                        help='Output file to write Income results to.')
+    
+
+    known_args, pipeline_args = parser.parse_known_args(None)
+    pipeline_args.extend([
+        '--runner={0}'.format(runner),    # DataflowRunner, DirectRunner, runner (for user input into run())
+        '--project=sweetgooseberry-145819',
+        '--staging_location=gs://sweet-gooseberry-upload/IRR_CF_Engine/staging',
+        '--temp_location=gs://sweet-gooseberry-upload/IRR_CF_Engine/temp/',
+        '--job_name=sweetgooseberry-145819-irr-test',
+    ])
+    pipeline_options = PipelineOptions(pipeline_args)
+    pipeline_options.view_as(SetupOptions).save_main_session = True
+
+    # TD when reading / writing with BigQuery, need to have explicit schema
+
+
+
+    p = beam.Pipeline(options=pipeline_options)
+
     # no comments can be added in between the pipeline process below
     # each row in pipeline takes the output from previous
-    # 0603 change results save to generic C drive with a time stamp in the output file name
-    # | 'Save results' >> beam.io.WriteToText('C:\Users\huibr\Documents\Visual Studio 2015\Projects\PlayBeam\cashflows.csv')
+    # 170725 1230 output options CashflowResults, IncomesResults
 
-    pp \
-        | 'Create products' >> beam.Create(data) \
-        | 'Convert to LevelPay' >> beam.Map(ToLevelPay) \
-        | 'Generate cashflows' >> beam.FlatMap(lambda data: data.product.getCashflows(data.reportingDate, data.remainingAmount, curve)) \
-        | 'To text' >> beam.FlatMap(lambda x: x.AsCsv()) \
-        | 'Save results' >> beam.io.WriteToText('C:\IRR_CF_Results\cashflows_' + runTime + '.csv')
+    p \
+    | 'Create transaction level data' >> beam.Create(data) \
+    | 'Add existing product details to transactionLevelData' >> beam.Map(lambda transactionLevelData: AddProduct(transactionLevelData, 0)) \
+    | 'Add existing vol cashflows to transactionLevelData' >> beam.Map(
+        lambda transactionLevelData: AddCashflows(transactionLevelData, 0, reportingDate, indexDict)) \
+    | 'Add existing vol incomes to transactionLevelData' >> beam.Map(lambda transactionLevelData: AddIncomes(transactionLevelData, 0)) \
+    | 'Add new vol cashflows and incomes to transactionLevelData' >> beam.Map(lambda transactionLevelData: AddNewVolumes(transactionLevelData, runParameters, indexDict)) \
+    | 'Generate existing vol income results' >> beam.FlatMap(lambda transactionLevelData: transactionLevelData.CashflowResults[3]) \
+    | 'To text' >> beam.FlatMap(lambda x: x.AsCsv()) \
+    | 'Save results' >> beam.io.WriteToText(known_args.outputCashflow)
 
-    pp.run();
+    p.run();
 
-'''
-#        | 'Read products' >> beam.io.Read(CsvFileSource('C:\Users\huibr\Documents\Visual Studio 2015\Projects\PlayBeam\products.csv')) \
-#        | 'Read products' >> beam.io.ReadFromText('C:\Users\huibr\Documents\Visual Studio 2015\Projects\PlayBeam\products.csv') \
-    #pc = beam.Pipeline('DirectRunner')
+    endTime = datetime.now()
 
-    #pc \
-    #    | 'Read Tenors' >> beam.io.ReadFromText('C:\Users\huibr\Documents\Visual Studio 2015\Projects\PlayBeam\tenors.csv') \
-    #    | 'Convert to Tenor' >> beam.Map(ToTenor) \
-    #    | 'Group tenors by curve' >> beam.GroupByKey(lambda t: t.curveName)
-#        | 'Calculate Cashflows' >> beam.FlatMap(lambda x: x.toCashflows())
+    print(startTime)
+    print(endTime)
 
-    #products = [LevelPay(1, 100, 0.001, 'GBP', 60), LevelPay(2, 200, 0.02, 'GBP', 120)]
-    #res = products | beam.FlatMap(lambda x: x.getCashflows([1, 2, 3]))
-    #print res
-'''
-'''======================================== Excel Plugin Integration Module ========================================='''
-'''
-@xl_func("cached_object cfs, cached_object curve: float")
-def eve(cfs, curve):
-    result = 0
-    for cf in cfs:
-        result = result + curve.df(cf.paymentDate) * (cf.interest +  cf.principal)
-    return result
-
-
-@xl_func("cached_object curve, string id, float bps: cached_object")
-def shockCurve(curve, id, bps):
-    result = curve.shock(id, bps)
-    return result
-
-
-@xl_func("string name, date[] dates, float[] rates: cached_object")
-def createCurve(name, dates, rates):
-    """
-    Create a yield curve with a given reference name.
-
-    :param name:  Reference name of the curve. e.g. GBP LIBOR
-    :param dates: An array of tenor dates.
-    :param rates: An array of interest rates.
-    """
-    tenors = []
-    for dte, rate in zip(dates, rates):
-        tenor = Tenor(dte[0], rate[0])
-        tenors.append(tenor)
-    result = Curve(name, dates[0][0], tenors)
-    return result
-
-
-@xl_func("cached_object curve, date dte")
-def getRate(curve, dte):
-    """
-    Retrieve an interpolated rate for a specific date from a reference curve.
-
-    :param name: A curve Reference
-    :param dte:  A tenor date for which the interpolated rate should be returned.
-    """
-    return curve.tenorDict[dte]
-
-@xl_func("cached_object curve, date fromDate, date toDate: float")
-def getForwardRate(curve, fromDate, toDate):
-    result = curve.fr(fromDate, toDate)
-    return result
-
-@xl_func("string id, date settlementDate, date maturityDate, int paymentFrequency, float notional, float spread, float firstCoupon: cached_object")
-def createLevelPay(id, settlementDate, maturityDate, paymentFrequency, notional = 1, spread = 0, firstCoupon = None):
-    result = LevelPay(id, settlementDate, maturityDate, paymentFrequency, notional, spread, firstCoupon)
-    return result
-
-
-@xl_func("cached_object leg, date reportingDate, float remainingAmount, cached_object curve: cached_object")
-def getCashflows(leg, reportingDate, remainingAmount, curve):
-    result = leg.getCashflows(reportingDate, remainingAmount, curve)
-    return result
-
-
-@xl_func("cached_object obj, string method, cached_list_or_vals pars: cached_object")
-def invoke(obj, method, pars):
-    attr = getattr(obj, method)
-    if attr is None:
-        return "Attribute not found: %s" % (method)
-
-    result = attr(pars)
-    return result    
-
-
-@xl_func("cached_object_or_val p0, cached_object_or_val p1, cached_object_or_val p2, cached_object_or_val p3, cached_object_or_val p4, cached_object_or_val p5, cached_object_or_val p6, cached_object_or_val p7, cached_object_or_val p8, cached_object_or_val p9 : cached_object")
-def createArray(p0, p1, p2, p3, p4, p5, p6, p7, p8, p9):
-    result = []
-    if p0:
-        result.append(p0)
-    if p1:
-        result.append(p1)
-    if p2:
-        result.append(p2)
-    if p3:
-        result.append(p3)
-    if p4:
-        result.append(p4)
-    if p5:
-        result.append(p5)
-    if p6:
-        result.append(p6)
-    if p7:
-        result.append(p7)
-    if p8:
-        result.append(p8)
-    if p9:
-        result.append(p9)
-    return result
-
-
-@xl_func("cached_object obj", auto_resize = True)
-def getMethods(obj):
-    result = []
-    for method in dir(obj): 
-        if callable(getattr(obj, method)):
-            result.append([method])
-    return result
-
-
-@xl_func("cached_object obj", auto_resize = True)
-def getProperties(obj):
-    result = []
-    for attr in dir(obj): 
-        if not callable(getattr(obj, attr)):
-            result.append([attr])
-    return result
-
-
-@xl_func("cached_object obj, string propName: string")
-def getProp(obj, propName):
-    result = getattr(obj, propName)
-    return result
-
-
-@xl_func("cached_object obj")
-def getHelp(obj):
-    result = getattr(obj, "__doc__")
-    return result
-
-
-@xl_func("cached_object obj, int index: cached_object")
-def getArrayItem(obj, index):
-    result = obj[index]
-    return result
-
-
-@xl_func("cached_object obj, string method", auto_resize = True)
-def getArgs(obj, method):
-    attr = getattr(obj, method)
-    result = []
-    for name in attr.__code__.co_varnames:    
-        result.append([name])
-    return result
-'''
+'''======================================== Execution Module ========================================='''
 
 if __name__ == "__main__":
-    runCF()
+    # product list IBCA, NIBCA, Mortgage
+    # shock list 0.00, 0.01, 0.02
+    # runner options: DirectRunner, DataflowRunner
+    # for each runner, a different output path is defined in run()
+
+    run('DataflowRunner')
 
 
+# performance
+# data volume       dataflow(min)       direct(mins)
+# 30                5                   0.1 (instant)
+# 300000            8 / 9               3
+# consecutaive runs can be triggered without noticable effect on run time
+# when triggering from the same laptop, runs can be 4 min apart, no change in per run performance
 
+# triggering python script takes 3m to start running 300k on gcp
+# running on cloud takes 8 mins per 300k records
+
+# trigger python script takes 8m to start running 600k on gcp (seems to be max limit)
+# running on cloud takes 12 mins per 600k records
+
+# local initiation of 300 lines is 1 min
+# income generation for 300 lines is 5 mins
+
+# income generate on gcp for 300k is 12 mins
+
+# full planning run 30k existing for 15 mins
+
+# 1500000
+# 3000000
 

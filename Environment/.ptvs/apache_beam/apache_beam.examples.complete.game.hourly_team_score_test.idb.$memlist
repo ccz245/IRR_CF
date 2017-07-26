@@ -1,8 +1,0 @@
-TestPipeline
-logging
-hourly_team_score
-unittest
-HourlyTeamScoreTest
-beam
-assert_that
-equal_to
