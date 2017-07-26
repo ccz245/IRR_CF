@@ -1153,24 +1153,32 @@ def run(runner):
 
     # TD when reading / writing with BigQuery, need to have explicit schema
 
-
-
     p = beam.Pipeline(options=pipeline_options)
 
     # no comments can be added in between the pipeline process below
     # each row in pipeline takes the output from previous
     # 170725 1230 output options CashflowResults, IncomesResults
 
-    p \
-    | 'Create transaction level data' >> beam.Create(data) \
-    | 'Add existing product details to transactionLevelData' >> beam.Map(lambda transactionLevelData: AddProduct(transactionLevelData, 0)) \
-    | 'Add existing vol cashflows to transactionLevelData' >> beam.Map(
-        lambda transactionLevelData: AddCashflows(transactionLevelData, 0, reportingDate, indexDict)) \
-    | 'Add existing vol incomes to transactionLevelData' >> beam.Map(lambda transactionLevelData: AddIncomes(transactionLevelData, 0)) \
-    | 'Add new vol cashflows and incomes to transactionLevelData' >> beam.Map(lambda transactionLevelData: AddNewVolumes(transactionLevelData, runParameters, indexDict)) \
-    | 'Generate existing vol income results' >> beam.FlatMap(lambda transactionLevelData: transactionLevelData.CashflowResults[3]) \
-    | 'To text' >> beam.FlatMap(lambda x: x.AsCsv()) \
-    | 'Save results' >> beam.io.WriteToText(known_args.outputCashflow)
+    # 170726 1548 ability to choose either generate data in memory or load from csv
+    load_transaction_data = p | 'Create transaction level data' >> beam.Create(data)
+
+    # run existing volume cashflow and income
+    run_existing_volume = (load_transaction_data
+                           | 'Add existing product details to transactionLevelData' >> beam.Map(lambda transactionLevelData: AddProduct(transactionLevelData, 0))
+                           | 'Add existing vol cashflows to transactionLevelData' >> beam.Map(
+        lambda transactionLevelData: AddCashflows(transactionLevelData, 0, reportingDate, indexDict))
+                           | 'Add existing vol incomes to transactionLevelData' >> beam.Map(lambda transactionLevelData: AddIncomes(transactionLevelData, 0)))
+
+    # run new volume projection (ie create new transactions, calculate their cashflow and income)
+    run_new_volume = run_existing_volume | 'Add new vol cashflows and incomes to transactionLevelData' >> beam.Map(lambda transactionLevelData: AddNewVolumes(transactionLevelData, runParameters, indexDict))
+
+    # convert to output format for writing to storage
+    output_results = (run_new_volume
+                      | 'Generate existing vol income results' >> beam.FlatMap(lambda transactionLevelData: transactionLevelData.CashflowResults[3])
+                      | 'To text' >> beam.FlatMap(lambda x: x.AsCsv()))
+
+    # write output to storage
+    output_results | 'Save results' >> beam.io.WriteToText(known_args.outputCashflow)
 
     p.run();
 
