@@ -12,7 +12,6 @@ from apache_beam.options.pipeline_options import PipelineOptions
 from apache_beam.options.pipeline_options import SetupOptions
 
 
-
 # feedback 170705 meeting with Svetlana, Gilbert
 # separate between back and new volume (and other reporting dimension tagging)
 # get full list of metrics / dimensions needed (Ghaz?)
@@ -21,8 +20,7 @@ from apache_beam.options.pipeline_options import SetupOptions
 # defaults / simplifications in LIQ must not affect IRR
 
 
-'''==================================== Overarching Principles =============================='''
-
+'''==================================== Overarching Design Principles =============================='''
 # clarity
 # functional transparency before performance / system optimisation
 
@@ -43,10 +41,69 @@ from apache_beam.options.pipeline_options import SetupOptions
 
 # one finance
 # over lapping processes between IRR / LIQ should be built so they can both utilise this cashflow engine
+'''==================================== Python / Google Best Practice =============================='''
+# module_name,package_name,method_name,function_name,global_var_name,instance_var_name,function_parameter_name,local_var_name
+# ClassName, ExceptionName
+# GLOBAL_CONSTANT_NAME
 
+# dictionary literal:
+# instead of dic = {} then dic['aaa'] = 5, use dic = {'aaa': 5}
+
+# return multiple results from a function using named tuples:
+# using namedtuple allows for both results[0] and results.sample_data references
+# import collections
+# results = collections.namedtuple('point', 'sample_data,base_volume')(sample_data, base_volume)
+
+# p.run().wait_until_finish() is needed if next step depends on full pipeline completion
+
+# shadowing names defined in outer scopes should be avoided
+# functions should generally not refer to global variables
+# or local variables with same names as global (ie outter) variables
+
+# code management usnig github
+# 
 
 '''==================================== Transaction, Market, Behavioural Input Module =============================='''
 
+
+# load run time parameters
+def loadRunParameters():
+    runParameters = {
+        'reportingDate': date(2016, 12, 31),
+        'projectionPeriod': 24,
+        'maxHorizon': 480,
+        'cashflowOutputPath': "C:\IRR_CF_Results\cashflows_output_",
+        'cashflowOutputHeader': "Deal_ID,Payment_Date,Beginning_Balance,Interest_Rate,Scheduled_Total,Interest_Payment,Principal_Payment,Prepayment,Remaining_Balance",
+        'incomeOutputPath': "C:\IRR_CF_Results\income_output_",
+        'incomeOutputHeader': "Deal_ID,Month_End_Date,Income_Accrual,Payment_Date,Interest_Paid",
+        'outputFormat': ".csv",
+        'logOutputPath': "C:\IRR_CF_Results\log_output_",
+        'logOutputHeader': "Start_Time,End_Time,Duration,Product,Existing_Deal_Count,New_Deal_Count,Cashflow_Lines,Income_Lines,Cashflow_File_Size(MB),Income_File_Size(MB)",
+        'shock': 0,
+        # data definition format: product, volume, shock
+        # TD for now, assuming each run is only for a specific market shock, consider whether we want to define shock at the deal level
+        'dataDefinitions': [
+            DataDefinition("IBCA", 10),
+            DataDefinition("NIBCA", 10),
+            DataDefinition("Mortgage", 10),
+            ],
+        # runner options: DirectRunner, DataflowRunner
+        # for each runner, a different input / output path is defined in run()
+        'runner': "DataflowRunner",
+        # data options: GenerateData, LoadData
+        'dataSource': "LoadData",
+        'transactionMeta': [('dealID','string'),('reportingDate', 'date'), ('productName','string'), ('settlementDate', 'date'), ('maturityDate', 'date'), ('paymentFrequency', 'integer'), ('spread', 'float'), ('currentCoupon', 'float'), ('remainingAmount', 'float'), ('amortizationType','string'), ('prepaymentModel','string'), ('rateIndex','string'), ('dayCount','string')],
+        'localTransactionData': 'C:/Users/charl/Google Drive/10. Coding/9. IRR CF Engine Python/Google Cloud/input data/10-2017-07-29-05-56-27/*',
+        'localCashflowOutput': 'C:/Users/charl/Google Drive/10. Coding/9. IRR CF Engine Python/Google Cloud/output results/cashflow-',
+        'localIncomeOutput': 'C:/Users/charl/Google Drive/10. Coding/9. IRR CF Engine Pythoin/Google Cloud/output results/income-',
+        'cloudTransactionDate': 'gs://sweet-gooseberry-upload/IRR_CF_Engine/input/30x100000-2017-07-29-07-19-02/*',
+        'cloudCashflowOutput': 'gs://sweet-gooseberry-upload/IRR_CF_Engine/output/cashflow-results-30x100k-',
+        'cloudIncomeOutput': 'gs://sweet-gooseberry-upload/IRR_CF_Engine/output/income-results-30x100k-',
+        'jobName': 'sweetgooseberry-145819-irr-test-30x100k-',
+        'autoscaling': 'NONE',  # options NONE, THROUGHPUT_BASED, google's' autoscaling is suited for much (much) larger datasets
+        'num_workers': '25',  # this should be conservative vs resourse quota (24-25 on us-central1, as of 201707), if over limit can create errors
+    }
+    return runParameters
 
 class Object(object):
     pass
@@ -297,31 +354,6 @@ def loadMortgageNewBus():
     result = targetBalanaces
     return result
 
-
-# load run time parameters
-def loadRunParameters():
-    runParameter = {
-        'reportingDate': date(2016, 12, 31),
-        'projectionPeriod': 24,
-        'maxHorizon': 480,
-        'cashflowOutputPath': "C:\IRR_CF_Results\cashflows_output_",
-        'cashflowOutputHeader': "Deal_ID,Payment_Date,Beginning_Balance,Interest_Rate,Scheduled_Total,Interest_Payment,Principal_Payment,Prepayment,Remaining_Balance",
-        'incomeOutputPath': "C:\IRR_CF_Results\income_output_",
-        'incomeOutputHeader': "Deal_ID,Month_End_Date,Income_Accrual,Payment_Date,Interest_Paid",
-        'outputFormat': ".csv",
-        'logOutputPath': "C:\IRR_CF_Results\log_output_",
-        'logOutputHeader': "Start_Time,End_Time,Duration,Product,Existing_Deal_Count,New_Deal_Count,Cashflow_Lines,Income_Lines,Cashflow_File_Size(MB),Income_File_Size(MB)",
-        'shock': 0,
-        # data definition format: product, volume, shock
-        # TD for now, assuming each run is only for a specific market shock, consider whether we want to define shock at the deal level
-        'dataDefinitions': [
-            DataDefinition("IBCA", 20000),
-            DataDefinition("NIBCA", 20000),
-            DataDefinition("Mortgage", 20000),
-            ]
-    # TD transfer other run parameters here
-    }
-    return runParameter
 
 
 '''=========================================== Market Projection Module ============================================'''
@@ -879,6 +911,15 @@ class Income:
         return [result]
 
 
+def ListToCSV(results_list):
+    # this function should cover both cashflow and income results
+    # it will read in a list of result objects, then apply object.AsCsv() to each, then product the combined results
+    csv_results = []
+    for result in results_list:
+        csv_result = result.AsCsv()
+        csv_results += csv_result
+    return csv_results
+
 
 
 
@@ -931,6 +972,47 @@ def CreateData(reportingDate, dataDefinitions):
     return masterDataList
 
 
+'''======================================== Load Input Data ========================================='''
+
+def CreateRunObjects(csvData, runParameters):
+
+    # working assumption is that csvData is a single line from the csv file, separated by ,
+    # convert csv string into list
+    data_list = csvData.split(",")
+    # meta data is a list of tuples, each tuple has (field name, field type)
+    transaction_meta = runParameters['transactionMeta']
+    headers_count = len(transaction_meta)
+
+    # initiate transaction level object to hold results
+    transactionLevelData = Object()
+    # load contractual features into transaction object
+    transaction = Object()
+    for i in range(headers_count):
+        string_value = str(data_list[i])
+        if transaction_meta[i][1] == 'string':
+            data_value = string_value
+        elif transaction_meta[i][1] == 'date':
+            data_value = datetime.strptime(string_value, '%d/%m/%Y').date()
+        elif transaction_meta[i][1] == 'float':
+            data_value = float(string_value)
+        elif transaction_meta[i][1] == 'integer':
+            data_value = int(string_value)
+        else:
+            data_value = string_value
+        setattr(transaction, transaction_meta[i][0], data_value)
+    setattr(transactionLevelData, "transactions", [transaction])
+
+    # load target balances into target balance object
+    # the extra columns in the csv data beyond the contractual feature headers are target balances by period
+    data_count = len(data_list)
+    targetBalanaces = []
+    for i in range(headers_count, data_count):
+        string_value = str(data_list[i])
+        data_value = float(string_value)
+        targetBalanaces.append(BalTarget(i - headers_count + 1, data_value))
+    setattr(transactionLevelData, "targetBalance", targetBalanaces)
+
+    return transactionLevelData
 
 
 '''======================================== Google Cloud Integration Module ========================================='''
@@ -957,10 +1039,10 @@ def AddProduct(transactionLevelData, i):
         setattr(transactionLevelData, "Products", [product])
     return transactionLevelData
 
-def AddCashflows(transactionLevelData, i, reportingDate, indexDict):
+def AddCashflows(transactionLevelData, i, evaluationDate, indexDict):
     product = transactionLevelData.Products[i]
     # cashflows is a list of cashlfow object, each object has pay date, pay amount, etc
-    cashflows = product.getCashflows(reportingDate, indexDict)
+    cashflows = product.getCashflows(evaluationDate, indexDict)
 
     if hasattr(transactionLevelData, 'CashflowResults'):
         transactionLevelData.CashflowResults.append(cashflows)
@@ -984,6 +1066,7 @@ def AddNewVolumes(transactionLevelData, runParameters, indexDict):
     projectionPeriod = runParameters['projectionPeriod']
     maxHorizon = runParameters['maxHorizon']
     reportingDate = runParameters['reportingDate']
+    evaluationDate = reportingDate
     # cashflowsResults is the Cashflows attribute of the transaction level data object
     # it's a list (by individual existing / new deals) of lists (by payment timing) of object (individual cashflow)
     cashflowsResults = transactionLevelData.CashflowResults
@@ -1015,11 +1098,11 @@ def AddNewVolumes(transactionLevelData, runParameters, indexDict):
         transaction = newTransaction
 
         # TD rebuild reporting date dependency (eg a separate evaluation date)
-        reportingDate += relativedelta(day=1, months=+2, days=-1)
+        evaluationDate += relativedelta(day=1, months=+2, days=-1)
 
         AddTransaction(transactionLevelData, transaction)
         AddProduct(transactionLevelData, i+1)
-        AddCashflows(transactionLevelData, i+1, reportingDate, indexDict)
+        AddCashflows(transactionLevelData, i+1, evaluationDate, indexDict)
         AddIncomes(transactionLevelData, i+1)
 
     return transactionLevelData
@@ -1084,20 +1167,25 @@ def ToDo():
     logOuput.write(runParameters['logOutputHeader'] + "\n")
 '''
 
-def run(runner):
+def run():
     # initial log variables
-    startTime = datetime.now()
     existingDealCount = 0
     newDealCount = 0
     cashflowLineCount = 0
     incomeLineCount = 0
 
-    runTime = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+    startTime = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+    print('run start time: ' + startTime)
 
     '''initiate run time variables'''
     runParameters = loadRunParameters()
     reportingDate = runParameters['reportingDate']
     shock = runParameters['shock']
+    runner = runParameters['runner']
+    job_name = runParameters['jobName']
+    data_source = runParameters['dataSource']
+    num_worker = int(runParameters['num_workers'])
+    autoscaling = runParameters['autoscaling']
 
     # initiate curve and index objects
     curveDict = createCurveDict(reportingDate, shock)
@@ -1111,11 +1199,13 @@ def run(runner):
 
     # configure output / runner options based on user input
     if runner == 'DataflowRunner':
-        outputCashflowPath = 'gs://sweet-gooseberry-upload/IRR_CF_Engine/output/existing-cashflow-results' + runTime + '.txt'
-        outputIncomePath = 'gs://sweet-gooseberry-upload/IRR_CF_Engine/output/existing-income-results' + runTime + '.txt'
+        inputTransactionData = runParameters['cloudTransactionDate']
+        outputCashflowPath = runParameters['cloudCashflowOutput'] + startTime + '/cashflow_output.csv'
+        outputIncomePath = runParameters['cloudIncomeOutput'] + startTime + '/income_output.csv'
     else:
-        outputCashflowPath = 'C:/Users/charl/Google Drive/10. Coding/9. IRR CF Engine Python/Jupyter_Practice/output/cashflow-' + runTime + '.csv'
-        outputIncomePath = 'C:/Users/charl/Google Drive/10. Coding/9. IRR CF Engine Python/Jupyter_Practice/output/income-' + runTime + '.csv'
+        inputTransactionData = runParameters['localTransactionData']
+        outputCashflowPath = runParameters['localCashflowOutput'] + startTime + '.csv'
+        outputIncomePath = runParameters['localIncomeOutput'] + startTime + '.csv'
 
     parser = argparse.ArgumentParser()
 
@@ -1124,6 +1214,13 @@ def run(runner):
     # dest='input',
     # default='gs://dataflow-samples/shakespeare/kinglear.txt',
     # help='Input file to process.')
+    parser.add_argument('--inputTransactionData',
+                        dest='inputTransactionData',
+                        # CHANGE 1/5: The Google Cloud Storage path is required
+                        # for outputting the results.
+                        # output paths for dataflow / direct runner are configured above
+                        default=inputTransactionData,
+                        help='input transaction data file.')
     parser.add_argument('--outputCashflow',
                         dest='outputCashflow',
                         # CHANGE 1/5: The Google Cloud Storage path is required
@@ -1141,12 +1238,15 @@ def run(runner):
     
 
     known_args, pipeline_args = parser.parse_known_args(None)
+    # '--num_workers=500' can be used to force higher distribution, must not have any spaces in the parameter def
     pipeline_args.extend([
-        '--runner={0}'.format(runner),    # DataflowRunner, DirectRunner, runner (for user input into run())
+        '--runner={0}'.format(runner),
         '--project=sweetgooseberry-145819',
         '--staging_location=gs://sweet-gooseberry-upload/IRR_CF_Engine/staging',
         '--temp_location=gs://sweet-gooseberry-upload/IRR_CF_Engine/temp/',
-        '--job_name=sweetgooseberry-145819-irr-test',
+        '--job_name={0}'.format(job_name + startTime),
+        '--autoscaling_algorithm={0}'.format(autoscaling),
+        '--num_workers={0}'.format(num_worker)
     ])
     pipeline_options = PipelineOptions(pipeline_args)
     pipeline_options.view_as(SetupOptions).save_main_session = True
@@ -1160,42 +1260,42 @@ def run(runner):
     # 170725 1230 output options CashflowResults, IncomesResults
 
     # 170726 1548 ability to choose either generate data in memory or load from csv
-    load_transaction_data = p | 'Create transaction level data' >> beam.Create(data)
+    # both data methods generate PCollection, a large "bag" (ie un-ordered) of elements, which can be distributed freely
+    if data_source == "GenerateData":
+        load_transaction_data = p | 'Create transaction level data' >> beam.Create(data)
+    else:
+        load_transaction_data = (p
+                                 | 'Load csv transaction data' >> beam.io.ReadFromText(known_args.inputTransactionData)
+                                 | 'Convert into objects' >> beam.Map(lambda csvData: CreateRunObjects(csvData, runParameters)))
 
     # run existing volume cashflow and income
     run_existing_volume = (load_transaction_data
-                           | 'Add existing product details to transactionLevelData' >> beam.Map(lambda transactionLevelData: AddProduct(transactionLevelData, 0))
-                           | 'Add existing vol cashflows to transactionLevelData' >> beam.Map(
+                           | 'Add existing vol product' >> beam.Map(lambda transactionLevelData: AddProduct(transactionLevelData, 0))
+                           | 'Add existing vol cashflows' >> beam.Map(
         lambda transactionLevelData: AddCashflows(transactionLevelData, 0, reportingDate, indexDict))
-                           | 'Add existing vol incomes to transactionLevelData' >> beam.Map(lambda transactionLevelData: AddIncomes(transactionLevelData, 0)))
+                           | 'Add existing vol incomes' >> beam.Map(lambda transactionLevelData: AddIncomes(transactionLevelData, 0)))
 
     # run new volume projection (ie create new transactions, calculate their cashflow and income)
-    run_new_volume = run_existing_volume | 'Add new vol cashflows and incomes to transactionLevelData' >> beam.Map(lambda transactionLevelData: AddNewVolumes(transactionLevelData, runParameters, indexDict))
+    run_new_volume = run_existing_volume | 'Add new vol cashflows and incomes' >> beam.Map(lambda transactionLevelData: AddNewVolumes(transactionLevelData, runParameters, indexDict))
 
     # convert to output format for writing to storage
     output_results = (run_new_volume
-                      | 'Generate existing vol income results' >> beam.FlatMap(lambda transactionLevelData: transactionLevelData.CashflowResults[3])
-                      | 'To text' >> beam.FlatMap(lambda x: x.AsCsv()))
+                      | 'Generate existing vol income results' >> beam.FlatMap(lambda transactionLevelData: transactionLevelData.CashflowResults)
+                      | 'To text' >> beam.FlatMap(lambda results: ListToCSV(results)))
 
     # write output to storage
     output_results | 'Save results' >> beam.io.WriteToText(known_args.outputCashflow)
 
     p.run();
 
-    endTime = datetime.now()
-
-    print(startTime)
-    print(endTime)
+    endTime = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+    print('run end time: ' + endTime)
 
 '''======================================== Execution Module ========================================='''
 
 if __name__ == "__main__":
-    # product list IBCA, NIBCA, Mortgage
-    # shock list 0.00, 0.01, 0.02
-    # runner options: DirectRunner, DataflowRunner
-    # for each runner, a different output path is defined in run()
 
-    run('DataflowRunner')
+    run()
 
 
 # performance
@@ -1221,3 +1321,54 @@ if __name__ == "__main__":
 # 1500000
 # 3000000
 
+
+'''
+job name    sweetgooseberry-145819-irr-test-2017-07-27-22-48-39
+workers     15
+time        22 min
+volume      3x100k 90 MB (uploaded data)
+cf size     6.2 GB
+
+job name    sweetgooseberry-145819-irr-test-2017-07-28-06-00-22     
+workers     15
+time        2.5 hr
+volume      3x1 mil 900 MB (uploaded data)
+cf size     62 GB
+
+job name    sweetgooseberry-145819-irr-test-2017-07-28-07-52-34
+workers     15 (even if num_works is set to 500)
+time        2.25 hr
+volume      3x1 mil 900 MB (uploaded data)
+
+job name    sweetgooseberry-145819-irr-test-100-2017-07-28-22-19-21
+workers     23 (autoscaler turned off)
+time        1.25 hr
+volume      3x1 mil (uploaded data)
+
+job name    sweetgooseberry-145819-irr-test-30x100-2017-07-29-06-59-00
+workers     22 (target 23)
+time        4.5 min
+volume      3x100 900 KB (cloud generated data)
+cf size     64 MB
+
+job name    sweetgooseberry-145819-irr-test-30x100k-2017-07-29-07-33-52
+workers     22 (target 23)
+time        1.5 hr
+volume      30x100k 900MB (cloud generated data)
+cf size     129 files 64GB
+
+
+distribution limitation
+- environment used (sweetgoosberry) doesn't seem to distribute beyong 15 workers
+- in contrast to millions of data, this distribution is minimal
+- could consider less distributed methods (eg reinvest at the node level instead of existing deal level)
+- although distribution can be manually set, this has high risks, especially when total use approaches limit, better let google's autoscaler set it
+
+cloud file management
+- similar to hadoop big data cluster, files (in the common sense) should be folders on google cloud
+- wild card is then used to refer to  all files in that folder (eg /*)
+- if output files are unique (at the batch level) then folders should be used as deleting 50 out of 400 files is hard
+
+
+
+'''
